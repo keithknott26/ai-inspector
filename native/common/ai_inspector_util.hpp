@@ -104,7 +104,9 @@ inline std::string hex(uint64_t v, int width = 2) {
     return buf;
 }
 
+#if defined(__GNUC__) || defined(__clang__)
 inline std::string fmt(const char *f, ...) __attribute__((format(printf, 1, 2)));
+#endif
 inline std::string fmt(const char *f, ...) {
     char buf[1024];
     va_list ap;

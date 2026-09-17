@@ -14,9 +14,15 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Test)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 enable_testing()
 
+if(MSVC)
+    set(AI_INSPECTOR_WARNINGS /W4 /utf-8 /permissive-)
+else()
+    set(AI_INSPECTOR_WARNINGS -Wall -Wextra)
+endif()
+
 add_executable(unit_util tests/unit_util.cpp)
 target_include_directories(unit_util PRIVATE native/common)
-target_compile_options(unit_util PRIVATE -Wall -Wextra)
+target_compile_options(unit_util PRIVATE ${AI_INSPECTOR_WARNINGS})
 add_test(NAME unit_util COMMAND unit_util)
 
 add_executable(ui_tests
@@ -30,7 +36,7 @@ add_executable(ui_tests
     native/ui/settings.cpp native/ui/settings.h)
 target_include_directories(ui_tests PRIVATE native/ui native/common)
 target_compile_definitions(ui_tests PRIVATE PLUGIN_VERSION="${AI_INSPECTOR_VERSION}" AI_INSPECTOR_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
-target_compile_options(ui_tests PRIVATE -Wall -Wextra)
+target_compile_options(ui_tests PRIVATE ${AI_INSPECTOR_WARNINGS})
 target_link_libraries(ui_tests PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
 add_test(NAME ui_tests COMMAND ui_tests)
 set_tests_properties(ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)

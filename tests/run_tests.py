@@ -59,7 +59,7 @@ def check(name, cond, info=""):
 
 def find(build, name):
     cap = name[:1].upper() + name[1:]
-    for pattern in (f"run/{name}", f"run/Wireshark.app/Contents/MacOS/{name}", f"run/Wireshark.app/Contents/MacOS/{cap}",
+    for pattern in (f"run/{name}", f"run/*/{name}.exe", f"run/{name}.exe", f"run/Wireshark.app/Contents/MacOS/{name}", f"run/Wireshark.app/Contents/MacOS/{cap}",
                     f"run/{cap}.app/Contents/MacOS/{cap}"):
         hits = glob.glob(os.path.join(build, pattern))
         if hits:

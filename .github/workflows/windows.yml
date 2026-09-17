@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Windows build of Wireshark (pinned 4.7 revision) with the AI Inspector plugins.
+#
+# Produces:
+#   Wireshark-*-x64.exe                        installer with AI Inspector included
+#   ai-inspector-<ver>-wireshark-win64-portable.zip   unzip and run Wireshark.exe
+#   ai-inspector-<ver>-win64-plugins.zip       just the two DLLs (only for this exact Wireshark build)
+#
+# Runs on version tags (v*), which also publish a GitHub Release, and on demand
+# from the Actions tab ("Run workflow"). A full build takes roughly 1-2 hours.
+name: Windows build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.10.3"
+  CONFIGURATION: RelWithDebInfo
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 300
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: choco install -y --no-progress winflexbison3 nsis xsltproc
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $c = Get-Content cmake/AIInspectorVersion.cmake -Raw
+          $v = "{0}.{1}.{2}" -f `
+            [regex]::Match($c,'VERSION_MAJOR (\d+)').Groups[1].Value, `
+            [regex]::Match($c,'VERSION_MINOR (\d+)').Groups[1].Value, `
+            [regex]::Match($c,'VERSION_PATCH (\d+)').Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build Wireshark + AI Inspector and run tests
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files (x86)\NSIS;C:\ProgramData\chocolatey\bin;$env:PATH"
+          .\tools\build-windows.ps1 -QtDir $env:QT_ROOT_DIR -Configuration $env:CONFIGURATION `
+            -ThirdPartyDir "C:\wireshark-third-party"
+
+      - name: Build remaining Wireshark targets and the installer
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
+          cmake --build build-windows --config $env:CONFIGURATION --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis_prep
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $run = "build-windows\run\$env:CONFIGURATION"
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          # Portable Wireshark with the plugins already in its plugin folder
+          Compress-Archive -Path "$run\*" -DestinationPath "dist\ai-inspector-$v-wireshark-win64-portable.zip"
+
+          # Plugins only
+          $stage = "stage\plugins"
+          $engine = Get-ChildItem -Recurse $run -Filter ai_inspector_engine.dll | Select-Object -First 1
+          $ui = Get-ChildItem -Recurse $run -Filter ai_inspector.dll | Select-Object -First 1
+          $verDir = Split-Path (Split-Path $engine.DirectoryName -Parent) -Leaf   # e.g. 4.7
+          New-Item -ItemType Directory -Force "$stage\$verDir\epan", "$stage\$verDir\ui" | Out-Null
+          Copy-Item $engine.FullName "$stage\$verDir\epan\"
+          Copy-Item $ui.FullName "$stage\$verDir\ui\"
+          Copy-Item README.md, LICENSE, CHANGELOG.md stage\
+          Compress-Archive -Path "stage\*" -DestinationPath "dist\ai-inspector-$v-win64-plugins.zip"
+
+          Copy-Item build-windows\packaging\nsis\Wireshark-*.exe dist\
+          Get-ChildItem dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-inspector-windows
+          path: dist/*
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

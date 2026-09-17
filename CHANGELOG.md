@@ -7,6 +7,12 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+### Added
+- Windows support: `tools/build-windows.ps1`, NSIS installer with both plugins, `windows-build` CI job.
+
+### Fixed
+- MSVC portability in shared helpers and unit-test warning flags.
+
 ## [1.1.0] - 2026-09-17
 
 ### Changed

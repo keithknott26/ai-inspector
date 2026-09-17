@@ -37,7 +37,9 @@ QString UiSettings::keyFilePath() {
     const QString override = qEnvironmentVariable("AI_INSPECTOR_KEY_FILE");
     if (!override.isEmpty()) return override;
 #ifdef Q_OS_WIN
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // %APPDATA%\AI-Inspector\api_key (fixed; not derived from the host app's Qt names)
+    QString base = qEnvironmentVariable("APPDATA");
+    if (base.isEmpty()) base = QDir::home().filePath(QStringLiteral("AppData/Roaming"));
     return QDir(base).filePath(QStringLiteral("AI-Inspector/api_key"));
 #else
     return QDir::home().filePath(QStringLiteral(".config/ai-inspector/api_key"));

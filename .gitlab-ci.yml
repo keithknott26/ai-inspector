@@ -57,3 +57,31 @@ plugin-build:
   artifacts:
     paths: [dist/]
     expire_in: 30 days
+
+# Windows build (GitLab.com shared Windows runner or your own runner tagged "windows").
+# Manual by default: it installs Qt and builds Wireshark from scratch (slow).
+windows-build:
+  stage: build
+  tags: [saas-windows-medium-amd64]
+  timeout: 3h
+  rules:
+    - if: $CI_COMMIT_TAG
+    - when: manual
+      allow_failure: true
+  variables:
+    QT_VERSION: "6.10.3"
+    QT_DIR: 'C:\Qt\6.10.3\msvc2022_64'
+  script:
+    - choco install -y --no-progress winflexbison3 strawberryperl nsis
+    - python -m pip install aqtinstall
+    - python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt
+    - $env:PATH = "C:\Program Files (x86)\NSIS;C:\Strawberry\perl\bin;$env:PATH"
+    - |
+      $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+      Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+      Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64"
+      .\tools\build-windows.ps1 -QtDir $env:QT_DIR -Installer
+  artifacts:
+    paths:
+      - build-windows/packaging/nsis/Wireshark-*.exe
+    expire_in: 30 days

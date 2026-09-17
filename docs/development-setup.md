@@ -83,7 +83,36 @@ Useful environment variables:
 | `AI_INSPECTOR_UI_SCREENSHOTS=dir` | Save panel screenshots during the self-test |
 | `AI_INSPECTOR_PROVIDER` / `_ENDPOINT` / `_MODEL` / `_API_KEY` / `_KEY_FILE` | AI settings overrides |
 
-## 6. Debugging tips
+## 6. Windows
+
+Windows builds use Visual Studio, not Ninja/Homebrew. One-time setup:
+
+1. **Visual Studio 2022 or 2026 Community** with "Desktop development with C++" (MSVC x64, Windows SDK, C++ CMake tools).
+2. **Git** and **Python 3** (tick "Add to PATH").
+3. **Chocolatey packages** (admin PowerShell): `choco install -y winflexbison3 strawberryperl nsis`
+4. **Qt 6 for MSVC** (no account needed):
+   ```powershell
+   python -m pip install aqtinstall
+   python -m aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt
+   ```
+
+Build from a **Developer PowerShell for VS (x64)**:
+
+```powershell
+cd ai-inspector
+.\tools\build-windows.ps1 -QtDir C:\Qt\6.10.3\msvc2022_64             # build + tests
+.\tools\build-windows.ps1 -QtDir C:\Qt\6.10.3\msvc2022_64 -Installer  # also Wireshark-*.exe installer
+```
+
+If script execution is blocked: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+- Wireshark downloads its Windows libraries into `..\wireshark-third-party` on the first configure.
+- Output: `build-windows\run\RelWithDebInfo\Wireshark.exe`; plugins under `plugins\4.7\{epan,ui}`.
+- The installer (`build-windows\packaging\nsis\Wireshark-*.exe`) includes both plugins via `packaging\nsis\custom_plugins.txt`, which the script generates.
+- API key file on Windows: `%APPDATA%\AI-Inspector\api_key` (or set `AI_INSPECTOR_API_KEY`).
+- The in-app GUI self-test is not run on Windows yet; unit and TShark tests are.
+
+## 7. Debugging tips
 
 - **Engine output.** `tshark -r file -T fields -e frame.number -e ai_inspector.id`
   shows findings per frame.

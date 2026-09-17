@@ -131,5 +131,5 @@ UI plugin     : $ui_so
 Run Wireshark : sh $ai_inspector_root/tools/run-wireshark.sh
 TShark report : $build_dir/run/tshark -r capture.pcapng -q -z ai_inspector,report
 
-In Wireshark: Tools > AI Inspector > Open Inspector Panel, then the gear button to add an AI key. to add an AI key.
+In Wireshark: Tools > AI Inspector > Open Inspector Panel, then the gear button to add an AI key.
 EOF

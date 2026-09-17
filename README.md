@@ -45,7 +45,7 @@ The analysis runs locally and works without any AI provider. The assistant is op
 |---|---|
 | Wireshark | 4.7 development branch (Qt UI plugin API), pinned in `cmake/AIInspectorVersion.cmake` |
 | Qt | 6.x, the same Qt Wireshark is built with |
-| Platforms | macOS (developed and tested), Linux (CI) |
+| Platforms | macOS (developed and tested), Linux (CI), Windows x64 (build script and CI job; see docs/development-setup.md) |
 
 Plugins are binary modules. They must be built with the same Wireshark source revision, compiler and Qt as the Wireshark that loads them. They cannot be dropped into Wireshark 4.6 or an unrelated Wireshark build.
 
@@ -64,6 +64,7 @@ Build prerequisites:
 
 - **macOS:** Xcode command line tools, plus `brew install cmake ninja qt glib libgcrypt c-ares pcre2 speexdsp python`.
 - **Linux:** see the package list in `.gitlab-ci.yml`.
+- **Windows:** Visual Studio, Qt 6 (MSVC), Python, Git and NSIS, then `.\tools\build-windows.ps1 -QtDir C:\Qt\6.10.3\msvc2022_64` from a Developer PowerShell.
 
 `docs/development-setup.md` covers the details.
 
