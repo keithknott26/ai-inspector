@@ -77,9 +77,13 @@ windows-build:
     - python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt
     - $env:PATH = "C:\Program Files (x86)\NSIS;C:\Strawberry\perl\bin;$env:PATH"
     - |
-      $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-      Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
-      Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64"
+      $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+      $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+      if (-not $vs) { & $vswhere -all -products * -format text; throw "No Visual Studio / Build Tools with the C++ x64 toolset found on this runner" }
+      Write-Host "Using Visual Studio at $vs"
+      $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+      cmd /c "`"$vcvars`" >nul && set" | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] } }
+      if (-not (Get-Command cl -ErrorAction SilentlyContinue)) { throw "cl.exe still not on PATH after vcvars64.bat" }
       .\tools\build-windows.ps1 -QtDir $env:QT_DIR -Installer
   artifacts:
     paths:
