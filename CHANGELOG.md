@@ -7,6 +7,15 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-17
+
+### Fixed
+- Windows packaging: stage the Qt translation catalogs and the HTML user guide (or a
+  placeholder) so NSIS no longer aborts on an empty folder, and install asciidoctor in CI.
+- Windows artifacts are packed with 7-Zip and verified, so a missing portable zip fails the
+  build instead of passing silently.
+- Releases are published with the GitHub CLI (the release action fails on Windows runners).
+
 ## [1.2.0] - 2026-09-17
 
 ### Added

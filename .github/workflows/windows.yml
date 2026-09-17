@@ -117,9 +117,20 @@ jobs:
           path: dist/*
           retention-days: 30
 
+      # softprops/action-gh-release fails on Windows runners ("Error creating asset
+      # temp dir"), so publish with the GitHub CLI, which is preinstalled.
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $files = (Get-ChildItem dist -File | ForEach-Object { $_.FullName })
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "AI Inspector $tag" --generate-notes
+          }
+          if ($LASTEXITCODE) { throw "gh release failed ($LASTEXITCODE)" }
