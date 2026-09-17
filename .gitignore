@@ -13,3 +13,5 @@ upstream/
 .DS_Store
 Claude outputs/
 docs/local-installation.json
+_to_delete/
+build-development/
