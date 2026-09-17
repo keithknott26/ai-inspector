@@ -70,7 +70,7 @@ def find(build, name):
 def tshark(exe, args, env=None, timeout=300):
     e = dict(os.environ)
     e.update(env or {})
-    return subprocess.run([exe] + args, capture_output=True, text=True, env=e, timeout=timeout)
+    return subprocess.run([exe] + args, capture_output=True, text=True, encoding="utf-8", errors="replace", env=e, timeout=timeout)
 
 
 def test_engine(exe, caps):
@@ -134,7 +134,7 @@ def test_gui(exe, tshark_exe, caps):
             if sys.platform.startswith("linux"):
                 env.setdefault("QT_QPA_PLATFORM", "offscreen")
             try:
-                p = subprocess.run([exe, "-r", os.path.join(caps, cap)], capture_output=True, text=True, env=env, timeout=180)
+                p = subprocess.run([exe, "-r", os.path.join(caps, cap)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=180)
             except subprocess.TimeoutExpired as exc:
                 err = (exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
                 check(f"{cap} via {provider}: self-test finished", False,
@@ -166,7 +166,7 @@ def main():
     caps = a.captures
     if not caps:
         caps = tempfile.mkdtemp(prefix="ai_inspector_caps_")
-        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make-test-captures.py"), caps], capture_output=True, text=True)
+        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make-test-captures.py"), caps], capture_output=True, text=True, encoding="utf-8", errors="replace")
         if p.returncode:
             sys.exit("capture generation failed (pip install scapy cryptography):\n" + p.stderr[-800:])
     ts = find(a.build_dir, "tshark")
