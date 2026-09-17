@@ -72,7 +72,7 @@ windows-build:
     QT_VERSION: "6.10.3"
     QT_DIR: 'C:\Qt\6.10.3\msvc2022_64'
   script:
-    - choco install -y --no-progress winflexbison3 strawberryperl nsis
+    - choco install -y --no-progress winflexbison3 strawberryperl nsis asciidoctorj
     - python -m pip install aqtinstall
     - python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt
     - $env:PATH = "C:\Program Files (x86)\NSIS;C:\Strawberry\perl\bin;$env:PATH"

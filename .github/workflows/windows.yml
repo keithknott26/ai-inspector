@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: choco install -y --no-progress winflexbison3 nsis xsltproc
+        run: choco install -y --no-progress winflexbison3 nsis xsltproc asciidoctorj
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -78,26 +78,37 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $v = "${{ steps.ver.outputs.version }}"
           $run = "build-windows\run\$env:CONFIGURATION"
           New-Item -ItemType Directory -Force dist | Out-Null
 
-          # Portable Wireshark with the plugins already in its plugin folder
-          Compress-Archive -Path "$run\*" -DestinationPath "dist\ai-inspector-$v-wireshark-win64-portable.zip"
+          # Portable Wireshark with the plugins already in its plugin folder.
+          # 7-Zip handles the deep paths and file count better than Compress-Archive.
+          $portable = "dist\ai-inspector-$v-wireshark-win64-portable.zip"
+          & 7z a -tzip -mx=5 -bso0 -bsp0 $portable "$run\*"
+          if ($LASTEXITCODE) { throw "7z failed packing the portable build ($LASTEXITCODE)" }
 
           # Plugins only
           $stage = "stage\plugins"
           $engine = Get-ChildItem -Recurse $run -Filter ai_inspector_engine.dll | Select-Object -First 1
           $ui = Get-ChildItem -Recurse $run -Filter ai_inspector.dll | Select-Object -First 1
+          if (-not $engine -or -not $ui) { throw "Built plugins not found under $run" }
           $verDir = Split-Path (Split-Path $engine.DirectoryName -Parent) -Leaf   # e.g. 4.7
           New-Item -ItemType Directory -Force "$stage\$verDir\epan", "$stage\$verDir\ui" | Out-Null
           Copy-Item $engine.FullName "$stage\$verDir\epan\"
           Copy-Item $ui.FullName "$stage\$verDir\ui\"
           Copy-Item README.md, LICENSE, CHANGELOG.md stage\
-          Compress-Archive -Path "stage\*" -DestinationPath "dist\ai-inspector-$v-win64-plugins.zip"
+          & 7z a -tzip -mx=5 -bso0 -bsp0 "dist\ai-inspector-$v-win64-plugins.zip" "stage\*"
+          if ($LASTEXITCODE) { throw "7z failed packing the plugins zip ($LASTEXITCODE)" }
 
           Copy-Item build-windows\packaging\nsis\Wireshark-*.exe dist\
-          Get-ChildItem dist
+          Get-ChildItem dist | Format-Table Name, Length
+
+          # Every artifact must be present, or the run is not releasable.
+          foreach ($pattern in @("Wireshark-*-x64.exe", "*-wireshark-win64-portable.zip", "*-win64-plugins.zip")) {
+            if (-not (Get-ChildItem dist -Filter $pattern)) { throw "Missing artifact: $pattern" }
+          }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

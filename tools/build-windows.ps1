@@ -136,8 +136,19 @@ if ($Installer) {
     # tools), so build the default target first; the targets above are only a subset.
     Say "Building the remaining Wireshark targets for packaging"
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--parallel")
-    # windeployqt only fills run\<cfg>\translations when the Qt install ships the
-    # catalogs; NSIS aborts on an empty folder (File ... -> no files found).
+    # The NSIS script packages folders with File /r and aborts when one is empty.
+    # Optional pieces (Qt catalogs, the HTML user guide) are missing unless the Qt
+    # install ships them / asciidoctor is available, so build what we can and make
+    # sure every folder the installer expects has at least one file in it.
+    function Ensure-NonEmptyDir([string] $path, [string] $note) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+        if (Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue) { return }
+        Write-Warning "$path is empty; packaging a placeholder ($note)"
+        Set-Content -Encoding ascii -Path (Join-Path $path "README.txt") -Value $note
+    }
+
+    Say "Staging optional installer content"
+    # Qt's own translation catalogs, normally deployed by windeployqt.
     $transDir = Join-Path $runDir "translations"
     New-Item -ItemType Directory -Force -Path $transDir | Out-Null
     if (-not (Get-ChildItem -Path $transDir -File -ErrorAction SilentlyContinue)) {
@@ -147,11 +158,14 @@ if ($Installer) {
             Copy-Item (Join-Path $qtTrans "qt_*.qm") $transDir -ErrorAction SilentlyContinue
         }
     }
-    if (-not (Get-ChildItem -Path $transDir -File -ErrorAction SilentlyContinue)) {
-        Write-Warning "No Qt translation catalogs found in $QtDir\translations; packaging a placeholder."
-        Set-Content -Encoding ascii -Path (Join-Path $transDir "README.txt") `
-            -Value "Qt translation catalogs were not available when this package was built."
+    Ensure-NonEmptyDir $transDir "Qt translation catalogs were not available when this package was built."
+
+    # The HTML user guide needs asciidoctor; build it when that is installed.
+    if (Get-Command asciidoctor -ErrorAction SilentlyContinue) {
+        & cmake --build $BuildDir --config $Configuration --target user_guide_html
     }
+    Ensure-NonEmptyDir (Join-Path $BuildDir "doc\wsug_html_chunked") "The HTML user guide was not built (asciidoctor was not installed). See https://www.wireshark.org/docs/"
+    Ensure-NonEmptyDir (Join-Path $BuildDir "doc\wsug_html") "The HTML user guide was not built (asciidoctor was not installed). See https://www.wireshark.org/docs/"
 
     Say "Building the NSIS installer"
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--target", "wireshark_nsis_prep")
