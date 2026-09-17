@@ -35,7 +35,7 @@ add_executable(ui_tests
     native/ui/redactor.cpp native/ui/redactor.h
     native/ui/settings.cpp native/ui/settings.h)
 target_include_directories(ui_tests PRIVATE native/ui native/common)
-target_compile_definitions(ui_tests PRIVATE PLUGIN_VERSION="${AI_INSPECTOR_VERSION}" AI_INSPECTOR_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(ui_tests PRIVATE PLUGIN_VERSION="${AI_INSPECTOR_VERSION}" AI_INSPECTOR_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests" AI_INSPECTOR_PYTHON="${Python3_EXECUTABLE}")
 target_compile_options(ui_tests PRIVATE ${AI_INSPECTOR_WARNINGS})
 target_link_libraries(ui_tests PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
 add_test(NAME ui_tests COMMAND ui_tests)

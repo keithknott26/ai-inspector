@@ -68,9 +68,9 @@ private slots:
         QStandardPaths::setTestModeEnabled(true);
         const QString script = QStringLiteral(AI_INSPECTOR_TESTS_DIR "/mock_ai_server.py");
         const QString portFile = tmp_.filePath(QStringLiteral("port"));
-        server_.start(QStringLiteral("python3"), {script, QStringLiteral("--log"), tmp_.filePath(QStringLiteral("mock.log")),
+        server_.start(QStringLiteral(AI_INSPECTOR_PYTHON), {script, QStringLiteral("--log"), tmp_.filePath(QStringLiteral("mock.log")),
                                                   QStringLiteral("--port-file"), portFile});
-        QVERIFY(server_.waitForStarted());
+        QVERIFY2(server_.waitForStarted(), qPrintable(QStringLiteral("could not start %1: %2").arg(QStringLiteral(AI_INSPECTOR_PYTHON), server_.errorString())));
         QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(portFile) && QFile(portFile).size() > 0, 10000);
         QFile pf(portFile);
         QVERIFY(pf.open(QIODevice::ReadOnly));
