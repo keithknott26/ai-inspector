@@ -65,21 +65,15 @@ jobs:
             [regex]::Match($c,'VERSION_PATCH (\d+)').Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
 
-      - name: Build Wireshark + AI Inspector and run tests
+      # -Installer makes the script build every Wireshark target, stage the Qt
+      # translation catalogs and run the NSIS packaging steps itself, so the local
+      # and CI builds go through exactly the same path.
+      - name: Build Wireshark + AI Inspector, run tests, package installer
         shell: pwsh
         run: |
           $env:PATH = "C:\Program Files (x86)\NSIS;C:\ProgramData\chocolatey\bin;$env:PATH"
           .\tools\build-windows.ps1 -QtDir $env:QT_ROOT_DIR -Configuration $env:CONFIGURATION `
-            -ThirdPartyDir "C:\wireshark-third-party"
-
-      - name: Build remaining Wireshark targets and the installer
-        shell: pwsh
-        run: |
-          $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
-          cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis_prep
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            -ThirdPartyDir "C:\wireshark-third-party" -Installer
 
       - name: Package
         shell: pwsh
