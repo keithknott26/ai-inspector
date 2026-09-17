@@ -132,6 +132,10 @@ if (-not $SkipTests) {
 # --- Installer -------------------------------------------------------------------------
 if ($Installer) {
     Need makensis "https://nsis.sourceforge.io (add its folder to PATH)"
+    # The installer packages everything Wireshark ships (help, translations, extcap
+    # tools), so build the default target first; the targets above are only a subset.
+    Say "Building the remaining Wireshark targets for packaging"
+    Run cmake @("--build", $BuildDir, "--config", $Configuration, "--parallel")
     Say "Building the NSIS installer"
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--target", "wireshark_nsis_prep")
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--target", "wireshark_nsis")

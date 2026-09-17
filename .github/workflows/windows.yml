@@ -76,8 +76,6 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
-          cmake --build build-windows --config $env:CONFIGURATION --parallel
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis_prep
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build-windows --config $env:CONFIGURATION --target wireshark_nsis
