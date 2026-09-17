@@ -1,0 +1,13 @@
+# Approximates the existing code style. Format only the lines you change
+# (git clang-format) to keep diffs reviewable.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 130
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+PointerAlignment: Right
+BreakBeforeBraces: Attach
+IncludeBlocks: Preserve
+SortIncludes: false

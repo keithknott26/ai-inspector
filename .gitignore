@@ -1,0 +1,15 @@
+# Build output
+build/
+build-*/
+dist/
+__pycache__/
+*.pyc
+*.tar.gz
+
+# Wireshark source checkout (fetched by tools/fetch-wireshark.sh, not vendored)
+upstream/
+
+# Local machine files
+.DS_Store
+Claude outputs/
+docs/local-installation.json
