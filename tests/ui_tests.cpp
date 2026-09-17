@@ -24,6 +24,7 @@
 #include <QRegularExpression>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
@@ -66,6 +67,9 @@ private slots:
         qunsetenv("ANTHROPIC_API_KEY");
         qunsetenv("OPENAI_API_KEY");
         QStandardPaths::setTestModeEnabled(true);
+        // On macOS QSettings' native format is CFPreferences, which ignores HOME and
+        // would read (and overwrite) the developer's real AI Inspector preferences.
+        QSettings::setDefaultFormat(QSettings::IniFormat);
         const QString script = QStringLiteral(AI_INSPECTOR_TESTS_DIR "/mock_ai_server.py");
         const QString portFile = tmp_.filePath(QStringLiteral("port"));
         server_.start(QStringLiteral(AI_INSPECTOR_PYTHON), {script, QStringLiteral("--log"), tmp_.filePath(QStringLiteral("mock.log")),
@@ -576,6 +580,12 @@ private slots:
         QCOMPARE(wentTo, quint32(0));
 
         // End-to-end AI flow through the panel against the mock (redaction on).
+        {
+            UiSettings s = UiSettings::load(false);
+            s.redact = true;
+            s.includePacketTree = true;
+            s.save();
+        }
         qputenv("AI_INSPECTOR_PROVIDER", "compatible");
         qputenv("AI_INSPECTOR_ENDPOINT", url(QStringLiteral("/openai/v1/chat/completions")).toUtf8());
         const int before = loggedRequests().size();
