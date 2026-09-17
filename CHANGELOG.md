@@ -7,11 +7,21 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-17
+
 ### Added
-- Windows support: `tools/build-windows.ps1`, NSIS installer with both plugins, `windows-build` CI job.
+- Windows support: `tools/build-windows.ps1`, an NSIS installer containing both plugins,
+  a portable build and a plugins-only zip, published from tagged releases by GitHub Actions.
+- Settings dialog: provider defaults fill the endpoint URL, the model is a dropdown that can
+  load the models available to your key, the API key field holds an environment variable name
+  (only the name is stored), and timeout, max response tokens and findings sent to AI accept
+  **Auto** values chosen per provider.
 
 ### Fixed
 - MSVC portability in shared helpers and unit-test warning flags.
+- Tests run the interpreter CMake found instead of `python3`, decode tool output as UTF-8,
+  and no longer read or overwrite the developer's real settings on macOS.
+- Windows packaging no longer fails when the Qt install ships no translation catalogs.
 
 ## [1.1.0] - 2026-09-17
 

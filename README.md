@@ -7,6 +7,33 @@ AI Inspector is a pair of native Wireshark plugins:
 
 The analysis runs locally and works without any AI provider. The assistant is optional. It supports Anthropic (Claude), OpenAI, or any OpenAI-compatible endpoint such as a local Ollama.
 
+![Capture triage in the assistant](docs/images/assistant-triage.png)
+
+*Triage of a live capture: a plain-language summary, findings ranked by risk, and clickable frame links.*
+
+![Explaining the selected packet](docs/images/assistant-packet-explain.png)
+
+*Explaining the selected packet: the engine's finding for frame 4489 (SSH weak algorithm) with the context behind it.*
+
+## Download
+
+Binaries are published on the [Releases page](https://github.com/keithknott26/ai-inspector/releases). Each tagged release contains:
+
+| File | What it is |
+|---|---|
+| `Wireshark-<ver>-x64.exe` | Windows installer: Wireshark with both AI Inspector plugins already included |
+| `ai-inspector-<ver>-wireshark-win64-portable.zip` | Portable Windows build. Unzip and run `Wireshark.exe`, nothing to install |
+| `ai-inspector-<ver>-win64-plugins.zip` | The two plugin DLLs on their own |
+| `ai-inspector-<ver>-src.tar.gz` | Source archive |
+
+**Windows.** Run the installer, or unzip the portable build and start `Wireshark.exe`. Live capture also needs [Npcap](https://npcap.com); opening capture files does not.
+
+**macOS and Linux.** Build from source (see [Quick start](#quick-start)). There are no prebuilt packages yet.
+
+> Plugins are binary modules. They only load in a Wireshark built from the same source revision, compiler and Qt — which is why the Windows downloads ship Wireshark itself. The plugins-only zip fits the matching build in the same release, not a Wireshark you installed separately.
+
+After starting Wireshark, open a capture and choose **Tools > AI Inspector > Open Inspector Panel**. Verify the plugins under **Help > About Wireshark > Plugins**.
+
 ## Features
 
 **Analysis engine** (`ai_inspector_engine`, epan plugin)
@@ -45,26 +72,30 @@ The analysis runs locally and works without any AI provider. The assistant is op
 |---|---|
 | Wireshark | 4.7 development branch (Qt UI plugin API), pinned in `cmake/AIInspectorVersion.cmake` |
 | Qt | 6.x, the same Qt Wireshark is built with |
-| Platforms | macOS (developed and tested), Linux (CI), Windows x64 (build script and CI job; see docs/development-setup.md) |
-
-Plugins are binary modules. They must be built with the same Wireshark source revision, compiler and Qt as the Wireshark that loads them. They cannot be dropped into Wireshark 4.6 or an unrelated Wireshark build.
+| Platforms | macOS, Linux, Windows x64 |
 
 ## Quick start
 
+Building fetches the pinned Wireshark source and builds it together with the plugins.
+
 ```sh
-git clone <this repository> ai-inspector
+git clone https://github.com/keithknott26/ai-inspector.git
 cd ai-inspector
 sh tools/build-development.sh --gui-test   # fetches Wireshark, builds, tests
 sh tools/run-wireshark.sh                  # starts the development Wireshark
 ```
 
-Then open a capture and choose **Tools > AI Inspector > Open Inspector Panel**.
+On Windows, from a Visual Studio Developer PowerShell:
+
+```powershell
+.\tools\build-windows.ps1 -QtDir C:\Qt\6.10.3\msvc2022_64 -Installer
+```
 
 Build prerequisites:
 
 - **macOS:** Xcode command line tools, plus `brew install cmake ninja qt glib libgcrypt c-ares pcre2 speexdsp python`.
 - **Linux:** see the package list in `.gitlab-ci.yml`.
-- **Windows:** Visual Studio, Qt 6 (MSVC), Python, Git and NSIS, then `.\tools\build-windows.ps1 -QtDir C:\Qt\6.10.3\msvc2022_64` from a Developer PowerShell.
+- **Windows:** Visual Studio 2022 (or Build Tools) with the C++ x64 toolset, Qt 6 (MSVC), Python, Git, winflexbison3, Strawberry Perl and NSIS.
 
 `docs/development-setup.md` covers the details.
 
@@ -80,7 +111,14 @@ Build prerequisites:
 | `ai_inspector.rtt_ms` | 500 | Latency threshold (TCP/DNS; HTTP uses 4×) |
 | `ai_inspector.scan_ports` | 40 | Distinct ports that count as a port scan |
 
-**AI assistant.** Panel > ⚙ Settings, or environment variables (not saved):
+**AI assistant.** Panel > ⚙ Settings.
+
+- **Provider** fills in that provider's default **Endpoint URL** and model.
+- **Model** is a dropdown; **Refresh** loads the models your key can use from the provider. You can also type a model name.
+- **API key** holds either the name of an environment variable (the default, e.g. `ANTHROPIC_API_KEY` — only the name is saved) or a key you paste, which is written to `~/.config/ai-inspector/api_key` (`%APPDATA%\AI-Inspector\api_key` on Windows) with owner-only permissions.
+- **Request timeout**, **Max response tokens** and **Findings sent to AI** default to **Auto**, which picks a value suited to the provider. Enter a number to override.
+
+Environment variables override the saved settings and are never written to disk:
 
 | Variable | Purpose |
 |---|---|
@@ -89,9 +127,9 @@ Build prerequisites:
 | `OPENAI_API_KEY` | OpenAI key |
 | `AI_INSPECTOR_PROVIDER` | `anthropic`, `openai` or `compatible` |
 | `AI_INSPECTOR_ENDPOINT`, `AI_INSPECTOR_MODEL` | Endpoint and model overrides |
-| `AI_INSPECTOR_KEY_FILE` | Alternate key file (default `~/.config/ai-inspector/api_key`, mode 600) |
+| `AI_INSPECTOR_KEY_FILE` | Alternate key file |
 
-macOS apps started from Finder do not see shell variables. Start Wireshark with `tools/run-wireshark.sh` from a terminal, or save the key in Settings.
+macOS apps started from Finder do not see shell variables. Start Wireshark from a terminal (`tools/run-wireshark.sh`), or save the key in Settings.
 
 **TShark.**
 
@@ -118,7 +156,7 @@ native/engine/                  analysis engine plugin
 native/ui/                      Qt UI plugin (panel, dashboard, charts, chat, AI client, settings)
 tests/                          unit tests, mock AI server, integration runner
 tools/                          fetch, build, run, package, test-capture generator
-docs/                           architecture, development setup, publishing guide
+docs/                           architecture, development setup, publishing guide, screenshots
 ```
 
 ## Testing
@@ -131,22 +169,25 @@ python3 tests/run_tests.py --build-dir build-development --gui
 - **Unit tests.** Engine helpers, the AI client against a local mock server (streaming, errors, timeouts), redaction, settings, charts, chat rendering and panel behaviour.
 - **Integration tests.** They generate synthetic captures and check the expected findings in TShark. They then run a self-test inside a real Wireshark, including AI round trips against the mock server with leak checks.
 
-## Packaging
+CI builds and tests on Linux (GitLab) and Windows (GitHub Actions).
 
-```sh
-sh tools/package.sh --build-dir build-development
-```
+## Releasing
 
-This creates two files in `dist/`:
+1. Bump the version in `cmake/AIInspectorVersion.cmake` and move the `[Unreleased]` notes in `CHANGELOG.md` under it.
+2. Commit, then tag and push:
 
-- **Source archive.** `ai-inspector-<version>-src.tar.gz`.
-- **Binary bundle.** Tied to the exact Wireshark build, and contains `MANIFEST.txt` and `install.sh`.
+   ```sh
+   git tag -a v1.2.0 -m "AI Inspector 1.2.0"
+   git push origin main --tags
+   ```
+
+3. The tagged Windows build publishes the release with the installer and zips attached. `sh tools/package.sh` builds the source archive and a local binary bundle.
 
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): how the plugins work and the design rules.
 - [docs/development-setup.md](docs/development-setup.md): building, running and debugging.
-- [docs/publishing.md](docs/publishing.md): GitLab project, CI, releases and the upstream Wireshark route.
+- [docs/publishing.md](docs/publishing.md): repositories, CI, releases and the upstream Wireshark route.
 - [CONTRIBUTING.md](CONTRIBUTING.md): workflow, style, and how to add checks and charts.
 - [CHANGELOG.md](CHANGELOG.md).
 

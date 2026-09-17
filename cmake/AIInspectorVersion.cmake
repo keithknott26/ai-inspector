@@ -5,7 +5,7 @@
 # The value reaches C/C++ code as the PLUGIN_VERSION define (see
 # native/common/ai_inspector_version.h) and Wireshark's plugin list.
 set(AI_INSPECTOR_VERSION_MAJOR 1)
-set(AI_INSPECTOR_VERSION_MINOR 1)
+set(AI_INSPECTOR_VERSION_MINOR 2)
 set(AI_INSPECTOR_VERSION_PATCH 0)
 set(AI_INSPECTOR_VERSION "${AI_INSPECTOR_VERSION_MAJOR}.${AI_INSPECTOR_VERSION_MINOR}.${AI_INSPECTOR_VERSION_PATCH}")
 
