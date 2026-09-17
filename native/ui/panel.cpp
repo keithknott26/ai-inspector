@@ -626,7 +626,7 @@ void InspectorPanel::runTriage() {
     const UiSettings s = UiSettings::load();
     send(QStringLiteral("Triage this capture"),
          QStringLiteral("Capture analysis data (JSON):\n%1\n\nAnalyst request: Triage this capture.")
-             .arg(captureContext(static_cast<quint32>(s.maxFindings))));
+             .arg(captureContext(static_cast<quint32>(s.effectiveMaxFindings()))));
 }
 
 void InspectorPanel::explainSelectedPacket() {
@@ -655,7 +655,7 @@ void InspectorPanel::explainSelectedPacket() {
     // Capture context is only sent when the conversation does not already have it.
     const QString context = client_->conversationTurns() > 0
         ? QString()
-        : QStringLiteral("Capture analysis data (JSON):\n%1\n\n").arg(captureContext(static_cast<quint32>(qMin(s.maxFindings, 30))));
+        : QStringLiteral("Capture analysis data (JSON):\n%1\n\n").arg(captureContext(static_cast<quint32>(qMin(s.effectiveMaxFindings(), 30))));
     send(request, QStringLiteral("%1Selected packet %2 findings (JSON):\n%3\n\nSelected packet %2 decoded tree:\n%4\n\nAnalyst request: %5")
                       .arg(context).arg(pkt->frame)
                       .arg(pkt->findingsJson.isEmpty() ? QStringLiteral("[]") : pkt->findingsJson, tree, request));
@@ -677,7 +677,7 @@ void InspectorPanel::askQuestion() {
         send(q, QStringLiteral("Follow-up question: %1").arg(q));
     } else {
         send(q, QStringLiteral("Capture analysis data (JSON):\n%1\n\nAnalyst question: %2")
-                    .arg(captureContext(static_cast<quint32>(s.maxFindings)), q));
+                    .arg(captureContext(static_cast<quint32>(s.effectiveMaxFindings())), q));
     }
 }
 

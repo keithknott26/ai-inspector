@@ -32,6 +32,59 @@ QString AiConfig::defaultEndpoint(Provider p) {
     return {};
 }
 
+int AiConfig::autoTimeoutSeconds(Provider p) {
+    // Local models can pause for a long time before the first token.
+    return p == Provider::OpenAICompatible ? 180 : 90;
+}
+
+int AiConfig::autoMaxTokens(Provider p) {
+    return p == Provider::OpenAICompatible ? 2048 : 4096;
+}
+
+int AiConfig::effectiveTimeoutSeconds() const {
+    return timeoutSeconds <= 0 ? autoTimeoutSeconds(provider) : qBound(5, timeoutSeconds, 900);
+}
+
+int AiConfig::effectiveMaxTokens() const {
+    return maxTokens <= 0 ? autoMaxTokens(provider) : qBound(256, maxTokens, 32000);
+}
+
+QString AiConfig::apiKeyEnvVar(Provider p) {
+    switch (p) {
+    case Provider::Anthropic: return QStringLiteral("ANTHROPIC_API_KEY");
+    case Provider::OpenAI: return QStringLiteral("OPENAI_API_KEY");
+    case Provider::OpenAICompatible: return QStringLiteral("AI_INSPECTOR_API_KEY");
+    }
+    return {};
+}
+
+QUrl AiConfig::modelsUrl() const {
+    QUrl url = effectiveEndpoint();
+    QString path = url.path();
+    for (const auto &suffix : {QStringLiteral("/chat/completions"), QStringLiteral("/messages"), QStringLiteral("/completions")}) {
+        if (path.endsWith(suffix)) {
+            path.chop(suffix.size());
+            break;
+        }
+    }
+    while (path.endsWith(QLatin1Char('/'))) path.chop(1);
+    url.setPath(path + QStringLiteral("/models"));
+    url.setQuery(QString());
+    return url;
+}
+
+QStringList AiConfig::suggestedModels(Provider p) {
+    switch (p) {
+    case Provider::Anthropic:
+        return {QStringLiteral("claude-haiku-4-5"), QStringLiteral("claude-sonnet-4-5"), QStringLiteral("claude-opus-4-5")};
+    case Provider::OpenAI:
+        return {QStringLiteral("gpt-4.1"), QStringLiteral("gpt-4.1-mini"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini"), QStringLiteral("o4-mini")};
+    case Provider::OpenAICompatible:
+        return {QStringLiteral("llama3.1"), QStringLiteral("qwen2.5"), QStringLiteral("mistral")};
+    }
+    return {};
+}
+
 QString AiConfig::providerName(Provider p) {
     switch (p) {
     case Provider::Anthropic: return QStringLiteral("Anthropic (Claude)");
@@ -71,7 +124,7 @@ QString AiConfig::validate() const {
     static const QRegularExpression modelRe(QStringLiteral("^[A-Za-z0-9._:/@-]+$"));
     if (!modelRe.match(effectiveModel()).hasMatch())
         return QStringLiteral("The model name is not valid.");
-    if (timeoutSeconds < 5 || timeoutSeconds > 900)
+    if (timeoutSeconds != 0 && (timeoutSeconds < 5 || timeoutSeconds > 900))
         return QStringLiteral("The timeout must be between 5 and 900 seconds.");
     return {};
 }
@@ -115,6 +168,29 @@ QString AiClient::systemPrompt() {
         "Be precise and do not invent frames, fields or values that are not in the data.");
 }
 
+QStringList AiClient::parseModelList(Provider provider, const QByteArray &body) {
+    QStringList ids;
+    const QJsonObject o = QJsonDocument::fromJson(body).object();
+    for (const auto &v : o.value(QStringLiteral("data")).toArray()) {
+        const QString id = v.toObject().value(QStringLiteral("id")).toString().trimmed();
+        if (id.isEmpty()) continue;
+        if (provider == Provider::OpenAI) {
+            // Keep chat-capable families; skip embeddings, audio, image and moderation models.
+            static const QRegularExpression chat(QStringLiteral("^(gpt-|o[0-9]|chatgpt-)"));
+            static const QRegularExpression skip(QStringLiteral("(embedding|whisper|tts|dall-e|image|audio|realtime|transcribe|moderation|search)"));
+            if (!chat.match(id).hasMatch() || skip.match(id).hasMatch()) continue;
+        }
+        ids.append(id);
+    }
+    for (const auto &v : o.value(QStringLiteral("models")).toArray()) { // Ollama /api/tags shape
+        const QString id = v.toObject().value(QStringLiteral("name")).toString().trimmed();
+        if (!id.isEmpty()) ids.append(id);
+    }
+    ids.removeDuplicates();
+    if (provider != Provider::Anthropic) ids.sort(); // Anthropic already lists newest first
+    return ids;
+}
+
 void AiClient::resetConversation() {
     history_ = QJsonArray();
 }
@@ -122,7 +198,7 @@ void AiClient::resetConversation() {
 QByteArray AiClient::buildRequestBody(const AiConfig &config, const QJsonArray &messages) {
     QJsonObject body;
     body.insert(QStringLiteral("model"), config.effectiveModel());
-    body.insert(QStringLiteral("max_tokens"), qBound(256, config.maxTokens, 32000));
+    body.insert(QStringLiteral("max_tokens"), config.effectiveMaxTokens());
     if (config.stream) body.insert(QStringLiteral("stream"), true);
     if (config.provider == Provider::Anthropic) {
         body.insert(QStringLiteral("system"), systemPrompt());
@@ -180,7 +256,7 @@ void AiClient::ask(const AiConfig &config, const QString &userMessage) {
     timedOut_ = false;
     cancelled_ = false;
     elapsed_.start();
-    idle_.setInterval(config.timeoutSeconds * 1000);
+    idle_.setInterval(config.effectiveTimeoutSeconds() * 1000);
     reply_ = nam_->post(req, buildRequestBody(config, messages));
     connect(reply_.data(), &QNetworkReply::readyRead, this, &AiClient::onReadyRead);
     connect(reply_.data(), &QNetworkReply::finished, this, &AiClient::onReplyFinished);

@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 
@@ -22,12 +23,22 @@ struct AiConfig {
     QString model;         // blank = provider default
     QString endpoint;      // blank = provider default
     QString apiKey;
-    int timeoutSeconds = 90; // maximum silence (no bytes received) before failing
-    int maxTokens = 2048;
+    int timeoutSeconds = 0; // maximum silence (no bytes received) before failing; 0 = auto
+    int maxTokens = 0;      // 0 = auto (provider-appropriate default)
     bool stream = true;
 
     QString effectiveModel() const;
     QUrl effectiveEndpoint() const;
+    int effectiveTimeoutSeconds() const;
+    int effectiveMaxTokens() const;
+    static int autoTimeoutSeconds(Provider p);
+    static int autoMaxTokens(Provider p);
+    // Environment variable conventionally holding this provider's key (e.g. ANTHROPIC_API_KEY).
+    static QString apiKeyEnvVar(Provider p);
+    // URL of the provider's model list (GET), derived from the effective endpoint.
+    QUrl modelsUrl() const;
+    // A few well-known model ids shown before (or instead of) the live list.
+    static QStringList suggestedModels(Provider p);
     // Empty string when valid, otherwise a user-facing reason.
     QString validate() const;
     static QString defaultModel(Provider p);
@@ -67,6 +78,8 @@ public:
     };
     // Parses one SSE "data:" payload.
     static StreamEvent parseStreamData(Provider provider, const QByteArray &data);
+    // Parses a GET /models response ({"data":[{"id":...}]} or Ollama {"models":[{"name":...}]}).
+    static QStringList parseModelList(Provider provider, const QByteArray &body);
 
 signals:
     void delta(const QString &text);

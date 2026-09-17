@@ -126,6 +126,57 @@ private slots:
         QVERIFY(!AiClient::parseResponse(Provider::Anthropic, 200, R"([1,2])", text, err));
     }
 
+    void autoValuesAndModels() {
+        AiConfig c;
+        c.provider = Provider::Anthropic;
+        QCOMPARE(c.effectiveTimeoutSeconds(), AiConfig::autoTimeoutSeconds(Provider::Anthropic));
+        QCOMPARE(c.effectiveMaxTokens(), AiConfig::autoMaxTokens(Provider::Anthropic));
+        c.timeoutSeconds = 2;
+        QCOMPARE(c.effectiveTimeoutSeconds(), 5);
+        QVERIFY(!c.validate().contains(QStringLiteral("timeout")));
+        QCOMPARE(AiConfig::apiKeyEnvVar(Provider::OpenAI), QStringLiteral("OPENAI_API_KEY"));
+        QCOMPARE(c.modelsUrl().toString(), QStringLiteral("https://api.anthropic.com/v1/models"));
+        c.provider = Provider::OpenAICompatible;
+        c.endpoint = QStringLiteral("http://localhost:11434/v1/chat/completions?x=1");
+        QCOMPARE(c.modelsUrl().toString(), QStringLiteral("http://localhost:11434/v1/models"));
+        QVERIFY(AiConfig::autoTimeoutSeconds(Provider::OpenAICompatible) > AiConfig::autoTimeoutSeconds(Provider::OpenAI));
+        const QStringList oa = AiClient::parseModelList(Provider::OpenAI,
+            R"({"data":[{"id":"gpt-4.1"},{"id":"text-embedding-3-small"},{"id":"o4-mini"},{"id":"whisper-1"},{"id":"gpt-4o-audio-preview"}]})");
+        QCOMPARE(oa, (QStringList{QStringLiteral("gpt-4.1"), QStringLiteral("o4-mini")}));
+        const QStringList an = AiClient::parseModelList(Provider::Anthropic, R"({"data":[{"id":"claude-b"},{"id":"claude-a"}]})");
+        QCOMPARE(an, (QStringList{QStringLiteral("claude-b"), QStringLiteral("claude-a")}));
+        QCOMPARE(AiClient::parseModelList(Provider::OpenAICompatible, R"({"models":[{"name":"llama3.1:8b"}]})"),
+                 QStringList{QStringLiteral("llama3.1:8b")});
+        QVERIFY(AiClient::parseModelList(Provider::OpenAI, "not json").isEmpty());
+        QVERIFY(UiSettings::isEnvVarName(QStringLiteral("ANTHROPIC_API_KEY")));
+        QVERIFY(UiSettings::isEnvVarName(QStringLiteral("$MY_KEY")));
+        QVERIFY(!UiSettings::isEnvVarName(QStringLiteral("sk-ant-api03-abc")));
+        UiSettings u;
+        u.ai.provider = Provider::OpenAICompatible;
+        QCOMPARE(u.effectiveMaxFindings(), UiSettings::autoMaxFindings(Provider::OpenAICompatible));
+        u.maxFindings = 1000;
+        QCOMPARE(u.effectiveMaxFindings(), 500);
+    }
+
+    void keyFromNamedVariable() {
+        const QString keyFile = tmp_.filePath(QStringLiteral("keys2/api_key"));
+        qputenv("AI_INSPECTOR_KEY_FILE", keyFile.toUtf8());
+        UiSettings u = UiSettings::load(false);
+        u.ai.provider = Provider::OpenAI;
+        u.keyEnvVar = QStringLiteral("MY_TEAM_OPENAI_KEY");
+        u.save();
+        qputenv("MY_TEAM_OPENAI_KEY", "team-key");
+        const UiSettings v = UiSettings::load();
+        QCOMPARE(v.keyEnvVar, QStringLiteral("MY_TEAM_OPENAI_KEY"));
+        QCOMPARE(v.ai.apiKey, QStringLiteral("team-key"));
+        QVERIFY(v.keySource.contains(QStringLiteral("MY_TEAM_OPENAI_KEY")));
+        qunsetenv("MY_TEAM_OPENAI_KEY");
+        u.keyEnvVar.clear();
+        u.save();
+        QVERIFY(UiSettings::load().keyEnvVar.isEmpty());
+        qunsetenv("AI_INSPECTOR_KEY_FILE");
+    }
+
     void requestBody() {
         AiConfig c;
         c.provider = Provider::OpenAI;
