@@ -136,6 +136,23 @@ if ($Installer) {
     # tools), so build the default target first; the targets above are only a subset.
     Say "Building the remaining Wireshark targets for packaging"
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--parallel")
+    # windeployqt only fills run\<cfg>\translations when the Qt install ships the
+    # catalogs; NSIS aborts on an empty folder (File ... -> no files found).
+    $transDir = Join-Path $runDir "translations"
+    New-Item -ItemType Directory -Force -Path $transDir | Out-Null
+    if (-not (Get-ChildItem -Path $transDir -File -ErrorAction SilentlyContinue)) {
+        $qtTrans = Join-Path $QtDir "translations"
+        if (Test-Path $qtTrans) {
+            Copy-Item (Join-Path $qtTrans "qtbase_*.qm") $transDir -ErrorAction SilentlyContinue
+            Copy-Item (Join-Path $qtTrans "qt_*.qm") $transDir -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not (Get-ChildItem -Path $transDir -File -ErrorAction SilentlyContinue)) {
+        Write-Warning "No Qt translation catalogs found in $QtDir\translations; packaging a placeholder."
+        Set-Content -Encoding ascii -Path (Join-Path $transDir "README.txt") `
+            -Value "Qt translation catalogs were not available when this package was built."
+    }
+
     Say "Building the NSIS installer"
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--target", "wireshark_nsis_prep")
     Run cmake @("--build", $BuildDir, "--config", $Configuration, "--target", "wireshark_nsis")
