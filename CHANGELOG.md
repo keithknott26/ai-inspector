@@ -7,6 +7,24 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- MCP filter searches no longer stop after `limit * 4` input packets. Successful
+  results explicitly report a complete scan and distinguish omitted matching rows.
+- MCP per-frame findings use the engine's `ai_inspector.finding` field and structured
+  JSON, preserving punctuation and repeated-field alignment.
+- Malformed and oversized MCP requests return protocol errors instead of crashing
+  the server. Tool argument types are validated before execution.
+- TShark stdout and stderr are bounded while reading; overflow and timeouts stop
+  and reap the process instead of silently returning partial output.
+
+### Added
+- Dependency-free MCP regression tests, CTest integration, and a Linux/Windows/macOS
+  GitHub Actions workflow, including real-packet tests on Linux.
+
+### Changed
+- MCP TShark commands disable name resolution. Documentation clarifies that MCP
+  clients receive unredacted results and may forward them to an AI provider.
+
 ## [1.3.0] - 2026-09-17
 
 ### Added

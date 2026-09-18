@@ -6,9 +6,9 @@ Code, or anything else that speaks MCP — can analyze capture files without
 opening Wireshark.
 
 It is a single Python file with no third-party dependencies. Every call shells
-out to TShark with the `ai_inspector_engine` plugin loaded. Nothing leaves the
-machine: the server neither makes network requests nor talks to an AI provider.
-Captures are opened read-only.
+out to TShark with the `ai_inspector_engine` plugin loaded. Captures are opened
+read-only and TShark name resolution is disabled. Results are returned to the MCP
+client without automatic redaction; that client may forward them to its AI provider.
 
 ## Requirements
 
@@ -42,13 +42,19 @@ tools/mcp_server.py --self-test
 The summary is cached per file revision, so a session that calls
 `analyze_capture` then several `get_findings` runs TShark once.
 
+`run_filter` scans the whole capture, then returns up to `limit` matching rows.
+A successful result includes `scan_complete: true`; `truncated: true` means
+additional matching rows were omitted, not that only part of the capture was
+searched. Timeouts, output-limit violations, and invalid requested fields return
+tool errors instead of incomplete results presented as complete.
+
 ## Configuration
 
 | Variable | Purpose |
 |---|---|
 | `AI_INSPECTOR_TSHARK` | TShark binary to use |
 | `AI_INSPECTOR_PLUGINS` | Extra plugin directory passed to TShark (`--plugin-dir`) |
-| `AI_INSPECTOR_ROOTS` | `:`-separated directories the server may read captures from. Unset means any readable path — set it when the agent is not fully trusted |
+| `AI_INSPECTOR_ROOTS` | Directories the server may read captures from, separated by `:` on macOS/Linux or `;` on Windows. Unset means any readable path; set it when the agent is not fully trusted |
 | `AI_INSPECTOR_TIMEOUT` | Seconds per TShark run (default 120) |
 
 ## Connecting a client
@@ -87,5 +93,22 @@ finding carries.
   nothing.
 - A failing tool returns `isError` with a readable message rather than killing
   the connection, so an agent can correct itself and retry.
-- Output is bounded (8 MB per TShark run, 200 KB per frame dump or report), so a
-  large capture cannot flood the agent's context.
+- TShark output is bounded while reading: 8 MiB of stdout and 20,000 bytes of
+  stderr. Exceeding either limit stops the process and returns an error; JSON is
+  never silently cut. Use a narrower filter or smaller capture if needed.
+- Frame dumps and reports are capped at 200,000 characters with an explicit
+  truncation marker.
+- Input messages are limited to 1,048,576 characters, including the newline.
+  Oversized or malformed messages return protocol errors without ending the
+  connection. Notifications are silent; JSON-RPC batches are not supported.
+
+## Regression tests
+
+Run `python3 tests/test_mcp_server.py -v` for dependency-free tests of the protocol,
+parsing, timeouts, and output limits. GitHub Actions runs these on Linux, Windows,
+and macOS; they are also registered with CTest.
+
+Set `MCP_TEST_TSHARK=tshark` to include real-packet tests against stock TShark,
+without the AI Inspector engine loaded. These use a synthetic capture and a Lua
+fixture for the engine's repeated-field format, not a replacement for the full
+native integration suite.

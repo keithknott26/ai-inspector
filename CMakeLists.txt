@@ -13,6 +13,8 @@ set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Test)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 enable_testing()
+add_test(NAME mcp_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mcp_server.py)
+set_tests_properties(mcp_tests PROPERTIES TIMEOUT 120)
 
 if(MSVC)
     set(AI_INSPECTOR_WARNINGS /W4 /utf-8 /permissive-)
