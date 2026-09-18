@@ -20,6 +20,9 @@ All notable changes to AI Inspector. The format follows
   provider asks for confirmation.
 
 ### Changed
+- Settings: the three privacy choices (address redaction, the decoded packet tree, tool
+  calls) are grouped under one "Privacy" heading. All three are on by default, and a test
+  now holds them there.
 - Smoother transcript while an answer streams in: settled messages are cached instead of
   re-parsed from Markdown on every tick, the document swap no longer lets the scroll bar
   flicker back to the top, blocks that have only half arrived (an open code fence, a partial

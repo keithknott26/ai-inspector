@@ -16,6 +16,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QCheckBox>
+#include <QDialogButtonBox>
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -540,6 +542,36 @@ private slots:
         QVERIFY(UiSettings::storeApiKey(QString(), &err));
         QVERIFY(!QFile::exists(keyFile));
         qunsetenv("AI_INSPECTOR_KEY_FILE");
+    }
+
+    // The three privacy choices start on: redaction, the packet tree and tool
+    // calls. A stored value wins, and Restore Defaults puts all three back.
+    void privacyDefaultsAreOn() {
+        QSettings(qEnvironmentVariable("AI_INSPECTOR_SETTINGS_FILE"), QSettings::IniFormat).clear();
+        const UiSettings fresh = UiSettings::load(false);
+        QVERIFY(fresh.redact);
+        QVERIFY(fresh.includePacketTree);
+        QVERIFY(fresh.useTools);
+        {
+            SettingsDialog d;
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("redact"))->isChecked());
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("packetTree"))->isChecked());
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("useTools"))->isChecked());
+        }
+        // A deliberate opt-out is kept...
+        UiSettings off = UiSettings::load(false);
+        off.redact = off.includePacketTree = off.useTools = false;
+        off.save();
+        {
+            SettingsDialog d;
+            QVERIFY(!d.findChild<QCheckBox *>(QStringLiteral("useTools"))->isChecked());
+            // ...until Restore Defaults, which turns all three back on.
+            d.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::RestoreDefaults)->click();
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("redact"))->isChecked());
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("packetTree"))->isChecked());
+            QVERIFY(d.findChild<QCheckBox *>(QStringLiteral("useTools"))->isChecked());
+        }
+        QSettings(qEnvironmentVariable("AI_INSPECTOR_SETTINGS_FILE"), QSettings::IniFormat).clear();
     }
 
     // A provider forced by the environment is not silently different from the

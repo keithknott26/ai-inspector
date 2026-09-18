@@ -320,17 +320,20 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QDialog(parent), nam_(new QNet
     form->addRow(QStringLiteral("Findings sent to AI"), maxFindings_);
 
     redact_ = new QCheckBox(QStringLiteral("Replace IP and MAC addresses with placeholders before sending"), this);
+    redact_->setObjectName(QStringLiteral("redact"));
     redact_->setChecked(cur.redact);
     form->addRow(QStringLiteral("Privacy"), redact_);
     packetTree_ = new QCheckBox(QStringLiteral("Include the decoded packet tree when explaining a packet"), this);
+    packetTree_->setObjectName(QStringLiteral("packetTree"));
     packetTree_->setChecked(cur.includePacketTree);
     form->addRow(QString(), packetTree_);
     useTools_ = new QCheckBox(QStringLiteral("Let the assistant request capture data as it needs it (tool calls)"), this);
+    useTools_->setObjectName(QStringLiteral("useTools"));
     useTools_->setChecked(cur.useTools);
     useTools_->setToolTip(QStringLiteral("The assistant asks the engine for findings, frames and filters instead of "
                                          "receiving one large block up front. Turn this off for models that do not "
                                          "support tool calling."));
-    form->addRow(QStringLiteral("Assistant"), useTools_);
+    form->addRow(QString(), useTools_); // grouped with the other two under "Privacy"
 
     auto *note = new QLabel(QStringLiteral("Findings, protocol statistics and (optionally) one decoded packet are sent to the "
                                            "selected provider, including anything it requests through tool calls. Raw "
