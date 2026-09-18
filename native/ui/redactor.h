@@ -33,6 +33,7 @@ bool isSensitiveField(const QString &abbrev);
 // Removes credential-like material regardless of the address-redaction
 // setting: known secret values collected from the packet, URL/query
 // parameters such as password=..., and Authorization header values.
+// JSON objects/arrays are scrubbed by string value to preserve their encoding.
 QString scrubSecrets(const QString &text, const QStringList &secretValues = QStringList());
 
 } // namespace aiinspector

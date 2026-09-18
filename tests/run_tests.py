@@ -137,6 +137,7 @@ def test_gui(exe, tshark_exe, caps):
             env = dict(os.environ, AI_INSPECTOR_UI_SELFTEST="1", AI_INSPECTOR_UI_SELFTEST_FRAME=frame[0] if frame else "0",
                        AI_INSPECTOR_PROVIDER=provider, AI_INSPECTOR_API_KEY="test-key-123",
                        AI_INSPECTOR_ENDPOINT=f"http://127.0.0.1:{port}/{path}",
+                       AI_INSPECTOR_SETTINGS_FILE=os.path.join(tmp, f"{provider}.ini"),
                        AI_INSPECTOR_KEY_FILE=os.path.join(tmp, "api_key"))
             plugin_root = os.path.join(os.path.dirname(tshark_exe), "plugins", "wireshark")
             if os.path.isdir(plugin_root):
@@ -158,12 +159,37 @@ def test_gui(exe, tshark_exe, caps):
             check(f"{cap} via {provider}: self-test passed", p.returncode == 0 and any("PASSED" in l for l in lines),
                   "\n".join(lines[-10:]) or p.stderr[-800:])
             body = open(log).read() if os.path.exists(log) else ""
-            check(f"{cap}: AI requests sent", body.count('"path"') == 2, body[:200])
+            # Triage and packet explanation each make a tool call followed by
+            # a request carrying its result. Count JSON records, not substrings.
+            try:
+                records = [json.loads(line) for line in body.splitlines() if line.strip()]
+                requests = [json.loads(record["body"]) for record in records]
+                sequence_ok = (len(requests) == 4
+                               and all(record["path"] == "/" + path for record in records))
+                result_counts = []
+                for request in requests:
+                    results = []
+                    for message in request["messages"]:
+                        if provider == "openai" and message["role"] == "tool":
+                            results.append(json.loads(message["content"]))
+                        elif provider == "anthropic" and isinstance(message.get("content"), list):
+                            results.extend(json.loads(block["content"])
+                                           for block in message["content"]
+                                           if block.get("type") == "tool_result")
+                    result_counts.append(len(results))
+                    sequence_ok = sequence_ok and bool(request.get("tools"))
+                    sequence_ok = sequence_ok and all(result.get("findings") for result in results)
+                sequence_ok = sequence_ok and result_counts == [0, 1, 0, 1]
+                detail = f"{len(requests)} requests; tool results per request: {result_counts}"
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                sequence_ok, detail = False, f"invalid mock request log: {exc}"
+            check(f"{cap}: both AI turns complete native tool round trips", sequence_ok, detail)
             leaked = [s for s in SECRETS if s in body]
             check(f"{cap}: no credentials sent", not leaked, leaked)
             check(f"{cap}: raw addresses redacted", "10.0.0." not in body and "IP-" in body, "")
     finally:
         server.kill()
+        server.wait()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
