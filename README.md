@@ -138,6 +138,7 @@ Environment variables override the saved settings and are never written to disk:
 | `AI_INSPECTOR_PROVIDER` | `anthropic`, `openai` or `compatible` |
 | `AI_INSPECTOR_ENDPOINT`, `AI_INSPECTOR_MODEL` | Endpoint and model overrides |
 | `AI_INSPECTOR_KEY_FILE` | Alternate key file |
+| `AI_INSPECTOR_SETTINGS_FILE` | Keep all settings in this INI file instead of the system store |
 
 macOS apps started from Finder do not see shell variables. Start Wireshark from a terminal (`tools/run-wireshark.sh`), or save the key in Settings.
 

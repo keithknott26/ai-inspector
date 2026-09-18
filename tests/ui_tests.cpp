@@ -68,9 +68,20 @@ private slots:
         qunsetenv("ANTHROPIC_API_KEY");
         qunsetenv("OPENAI_API_KEY");
         QStandardPaths::setTestModeEnabled(true);
-        // On macOS QSettings' native format is CFPreferences, which ignores HOME and
-        // would read (and overwrite) the developer's real AI Inspector preferences.
+        // On macOS QSettings' native format is CFPreferences, which ignores HOME
+        // and the default format, so these tests would read (and overwrite) the
+        // developer's real AI Inspector preferences. Redirect the whole store to
+        // a file in the temporary directory, and refuse to run if that fails.
         QSettings::setDefaultFormat(QSettings::IniFormat);
+        const QString settingsFile = tmp_.filePath(QStringLiteral("settings.ini"));
+        qputenv("AI_INSPECTOR_SETTINGS_FILE", settingsFile.toUtf8());
+        {
+            UiSettings probe;
+            probe.ai.model = QStringLiteral("isolation-probe");
+            probe.save();
+        }
+        QVERIFY2(QFile::exists(settingsFile), "settings are not isolated from real preferences");
+        QCOMPARE(UiSettings::load(false).ai.model, QStringLiteral("isolation-probe"));
         const QString script = QStringLiteral(AI_INSPECTOR_TESTS_DIR "/mock_ai_server.py");
         const QString portFile = tmp_.filePath(QStringLiteral("port"));
         server_.start(QStringLiteral(AI_INSPECTOR_PYTHON), {script, QStringLiteral("--log"), tmp_.filePath(QStringLiteral("mock.log")),

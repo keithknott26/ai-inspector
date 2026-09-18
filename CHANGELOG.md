@@ -8,6 +8,12 @@ All notable changes to AI Inspector. The format follows
 ## [Unreleased]
 
 ### Fixed
+- The unit tests no longer overwrite real AI Inspector preferences. On macOS QSettings uses
+  CFPreferences, which ignores both `HOME` and `QSettings::setDefaultFormat()`, so a test run
+  was saving its own provider, model and limits over the developer's settings — which then
+  looked like the Settings dialog refusing to keep a chosen provider. The store now honours
+  `AI_INSPECTOR_SETTINGS_FILE`, the tests point it at a temporary file, and they refuse to
+  run if that redirect does not take effect.
 - Settings: a provider forced by `AI_INSPECTOR_PROVIDER` no longer looks like the saved
   setting being ignored. The dialog now names every environment override, including the
   provider, and says which variable to unset. Saving an endpoint that belongs to a different

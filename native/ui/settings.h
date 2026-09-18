@@ -12,6 +12,9 @@
 //     its value), then the key file (~/.config/ai-inspector/api_key, owner-only
 //     permissions; override with AI_INSPECTOR_KEY_FILE).
 //   Timeout, max tokens and findings sent to AI accept 0 = Auto.
+//
+// AI_INSPECTOR_SETTINGS_FILE replaces the whole QSettings store with that INI
+// file. Tests set it so they cannot write to real preferences.
 #pragma once
 
 #include "ai_client.h"

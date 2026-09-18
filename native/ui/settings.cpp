@@ -29,6 +29,13 @@ namespace aiinspector {
 
 namespace {
 QSettings store() {
+    // AI_INSPECTOR_SETTINGS_FILE redirects everything to one INI file. The test
+    // suite sets it so a test run can never reach the developer's real
+    // preferences: on macOS the native backend is CFPreferences, which ignores
+    // HOME and QSettings::setDefaultFormat(), so nothing else reliably isolates
+    // it. It is also a way to pin settings in a managed deployment.
+    const QString file = qEnvironmentVariable("AI_INSPECTOR_SETTINGS_FILE").trimmed();
+    if (!file.isEmpty()) return QSettings(file, QSettings::IniFormat);
     return QSettings(QStringLiteral("AI-Inspector"), QStringLiteral("AIInspector"));
 }
 
