@@ -1,9 +1,10 @@
 # AI Inspector for Wireshark
 
-AI Inspector is a pair of native Wireshark plugins:
+AI Inspector is a pair of native Wireshark plugins, plus an MCP server:
 
 - **Analysis engine.** A protocol analysis engine that flags security, performance and protocol problems in common protocols.
 - **Dockable panel.** A panel with an overview dashboard, a searchable findings list, and an AI assistant that explains captures and individual packets.
+- **MCP server.** The same engine exposed to agents, so a capture can be analyzed without opening Wireshark. Local and read-only; it makes no network requests.
 
 The analysis runs locally and works without any AI provider. The assistant is optional. It supports Anthropic (Claude), OpenAI, or any OpenAI-compatible endpoint such as a local Ollama.
 
@@ -63,8 +64,16 @@ After starting Wireshark, open a capture and choose **Tools > AI Inspector > Ope
 - **Assistant.**
   - Streaming answers, with Stop and elapsed-time display.
   - Capture triage, explain the selected packet, and follow-up questions.
+  - **Pulls what it needs.** Rather than receiving one large block of JSON, the assistant calls back into the engine: `get_findings` (by severity, category, protocol or text), `get_capture_summary`, `get_frame_findings`, `get_selected_packet`, `get_report` and `validate_filter`. The first request stays small, and the answer records which data was consulted. Turn it off in Settings for models without tool calling.
   - Answers can include native charts, clickable display filters (validated with Wireshark's compiler) and frame links.
 - **Report.** A plain-text findings report you can save or copy.
+
+**MCP server** (`tools/mcp_server.py`). A stdio Model Context Protocol server with no third-party dependencies, wrapping TShark with the engine plugin: `analyze_capture`, `get_findings`, `get_frame_findings`, `run_filter`, `get_frame` and `get_report`. Point an agent at a `.pcapng` and ask. See [docs/mcp.md](docs/mcp.md).
+
+```sh
+tools/mcp_server.py --self-test    # check the wiring
+claude mcp add ai-inspector -- python3 "$PWD/tools/mcp_server.py"
+```
 
 ## Compatibility
 
@@ -117,6 +126,7 @@ Build prerequisites:
 - **Model** is a dropdown; **Refresh** loads the models your key can use from the provider. You can also type a model name.
 - **API key** holds either the name of an environment variable (the default, e.g. `ANTHROPIC_API_KEY` — only the name is saved) or a key you paste, which is written to `~/.config/ai-inspector/api_key` (`%APPDATA%\AI-Inspector\api_key` on Windows) with owner-only permissions.
 - **Request timeout**, **Max response tokens** and **Findings sent to AI** default to **Auto**, which picks a value suited to the provider. Enter a number to override.
+- **Tool calls** let the assistant request capture data as it needs it instead of receiving one block up front. Leave it on for Anthropic and OpenAI; turn it off for a local model that does not support tool calling.
 
 Environment variables override the saved settings and are never written to disk:
 
@@ -141,10 +151,11 @@ tshark -r capture.pcapng -Y 'ai_inspector.severity >= 3' # packets with warnings
 
 ## Privacy and safety
 
-- **What is sent.** Only analysis results (findings, counts, timeline, hosts) and, when you explain a packet, that packet's decoded tree. Raw capture bytes are never sent.
-- **Addresses.** IP and MAC addresses are replaced with placeholders such as `IP-3(private)` before sending. Answers show the real values again, locally only.
+- **What is sent.** Only analysis results (findings, counts, timeline, hosts) and, when you explain a packet, that packet's decoded tree — including anything the assistant requests through a tool call, which comes from the same analysis results. Raw capture bytes are never sent.
+- **Addresses.** IP and MAC addresses are replaced with placeholders such as `IP-3(private)` before sending, tool results included. Answers show the real values again, locally only.
 - **Credentials.** Credential fields (Authorization, cookies, passwords, SNMP communities, SMP keys) and `password=`/`token=` URL parameters are always removed.
 - **Endpoints.** Plain `http://` is refused except for localhost, and redirects are not followed.
+- **Tools.** The assistant can only call the six read-only tools listed above; there is no way for it to change a setting, write a file or apply a filter on its own. Tool calls are capped per request and every one is shown in the transcript.
 - **Answers.** Model output is untrusted text. Raw HTML is not interpreted and no remote resources load. Filters and packet jumps only happen when you click them, and only after validation.
 
 ## Project layout
@@ -155,7 +166,7 @@ native/common/                  C ABI between the plugins and shared helpers
 native/engine/                  analysis engine plugin
 native/ui/                      Qt UI plugin (panel, dashboard, charts, chat, AI client, settings)
 tests/                          unit tests, mock AI server, integration runner
-tools/                          fetch, build, run, package, test-capture generator
+tools/                          fetch, build, run, package, MCP server, test-capture generator
 docs/                           architecture, development setup, publishing guide, screenshots
 ```
 
@@ -167,7 +178,7 @@ python3 tests/run_tests.py --build-dir build-development --gui
 ```
 
 - **Unit tests.** Engine helpers, the AI client against a local mock server (streaming, errors, timeouts), redaction, settings, charts, chat rendering and panel behaviour.
-- **Integration tests.** They generate synthetic captures and check the expected findings in TShark. They then run a self-test inside a real Wireshark, including AI round trips against the mock server with leak checks.
+- **Integration tests.** They generate synthetic captures and check the expected findings in TShark, then drive the MCP server over stdio the way an agent would. They then run a self-test inside a real Wireshark, including AI round trips against the mock server with leak checks.
 
 CI builds and tests on Linux (GitLab) and Windows (GitHub Actions).
 
@@ -187,6 +198,7 @@ CI builds and tests on Linux (GitLab) and Windows (GitHub Actions).
 
 - [docs/architecture.md](docs/architecture.md): how the plugins work and the design rules.
 - [docs/development-setup.md](docs/development-setup.md): building, running and debugging.
+- [docs/mcp.md](docs/mcp.md): the MCP server, its tools and how to connect an agent.
 - [docs/publishing.md](docs/publishing.md): repositories, CI, releases and the upstream Wireshark route.
 - [CONTRIBUTING.md](CONTRIBUTING.md): workflow, style, and how to add checks and charts.
 - [CHANGELOG.md](CHANGELOG.md).

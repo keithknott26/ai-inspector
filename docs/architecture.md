@@ -78,7 +78,8 @@ the table or its semantics change.
 | `dashboard.*` | KPI cards and charts from the summary JSON |
 | `charts.*` | QPainter charts (bar, horizontal bar, donut, line, stacked), theme from the palette (light/dark), chart spec validation |
 | `chat_view.*` | Transcript rendering: Markdown (no raw HTML), inline charts, validated filter chips, frame links |
-| `ai_client.*` | Async streaming client (Anthropic Messages, OpenAI Chat Completions), timeouts, cancel, bounded history |
+| `ai_client.*` | Async streaming client (Anthropic Messages, OpenAI Chat Completions), timeouts, cancel, bounded history, the tool-call loop |
+| `engine_tools.*` | The tools the assistant may call, answered from the `Host` callbacks |
 | `redactor.*` | Address placeholders (reversible locally), credential scrubbing |
 | `settings.*` | Settings dialog, environment overrides, key file |
 | `selftest.*` | In-application integration test (`AI_INSPECTOR_UI_SELFTEST=1`) |
@@ -93,6 +94,33 @@ capture summary JSON (+ selected packet tree with sensitive values removed)
   → ChatView                Redactor::restore() for display, Markdown without HTML,
                             charts validated, filters compiled before they are clickable
 ```
+
+### Tool calls
+
+With tool calling on (the default), the first message carries no capture data at all.
+`EngineTools` declares six tools; `AiClient` runs the loop:
+
+```
+ask() → sendRound() → response contains tool_use / tool_calls
+      → EngineTools::run() via the panel's handler
+          arguments  ← Redactor::restore()   (the model works in placeholder space)
+          results    → scrubSecrets() → Redactor::apply()
+      → tool_result messages appended → sendRound() again
+      → …at most maxToolRounds() (6); the last round is sent with no tools offered
+      → finished(): the model's text plus a line per tool consulted
+```
+
+Tools are answered from the same `Host` callbacks the rest of the panel uses, so they
+inherit the engine's generation guard and need no new engine ABI. Results are capped
+(60 000 characters per call) and unknown tool names come back as errors rather than
+failing the request, so a model that invents a tool can correct itself.
+
+### MCP server
+
+`tools/mcp_server.py` is a separate, GUI-free path to the same engine: a stdio JSON-RPC
+server that shells out to TShark with `-z ai_inspector,json|report`, `-Y` and `-V`. It
+shares no code with the plugins — it only depends on the engine's documented TShark
+interface — which is what keeps it a single dependency-free file. See `docs/mcp.md`.
 
 ### Rules that keep it stable
 

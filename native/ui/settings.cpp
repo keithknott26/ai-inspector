@@ -115,6 +115,7 @@ UiSettings UiSettings::load(bool applyEnvironment) {
     u.ai.maxTokens = clampOrAuto(s.value(QStringLiteral("ai/max_tokens"), 0).toInt(), 256, 32000);
     u.redact = s.value(QStringLiteral("privacy/redact"), true).toBool();
     u.includePacketTree = s.value(QStringLiteral("privacy/include_packet_tree"), true).toBool();
+    u.useTools = s.value(QStringLiteral("ai/use_tools"), true).toBool();
     u.maxFindings = clampOrAuto(s.value(QStringLiteral("ai/max_findings"), 0).toInt(), 5, 500);
     const QString envName = s.value(QStringLiteral("ai/api_key_env")).toString().trimmed();
     if (isEnvVarName(envName)) u.keyEnvVar = envName.startsWith(QLatin1Char('$')) ? envName.mid(1) : envName;
@@ -174,6 +175,7 @@ void UiSettings::save() const {
     else s.setValue(QStringLiteral("ai/api_key_env"), keyEnvVar);
     s.setValue(QStringLiteral("privacy/redact"), redact);
     s.setValue(QStringLiteral("privacy/include_packet_tree"), includePacketTree);
+    s.setValue(QStringLiteral("ai/use_tools"), useTools);
     s.sync();
 }
 
@@ -296,9 +298,16 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QDialog(parent), nam_(new QNet
     packetTree_ = new QCheckBox(QStringLiteral("Include the decoded packet tree when explaining a packet"), this);
     packetTree_->setChecked(cur.includePacketTree);
     form->addRow(QString(), packetTree_);
+    useTools_ = new QCheckBox(QStringLiteral("Let the assistant request capture data as it needs it (tool calls)"), this);
+    useTools_->setChecked(cur.useTools);
+    useTools_->setToolTip(QStringLiteral("The assistant asks the engine for findings, frames and filters instead of "
+                                         "receiving one large block up front. Turn this off for models that do not "
+                                         "support tool calling."));
+    form->addRow(QStringLiteral("Assistant"), useTools_);
 
     auto *note = new QLabel(QStringLiteral("Findings, protocol statistics and (optionally) one decoded packet are sent to the "
-                                           "selected provider. Credential-bearing fields are always removed."), this);
+                                           "selected provider, including anything it requests through tool calls. Raw "
+                                           "capture bytes are never sent and credential-bearing fields are always removed."), this);
     note->setWordWrap(true);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, this);
@@ -313,6 +322,7 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QDialog(parent), nam_(new QNet
         maxFindings_->setValue(0);
         redact_->setChecked(true);
         packetTree_->setChecked(true);
+        useTools_->setChecked(true);
         if (UiSettings::isEnvVarName(apiKey_->text()) || apiKey_->text().isEmpty()) apiKey_->setText(AiConfig::apiKeyEnvVar(p));
     });
     connect(provider_, qOverload<int>(&QComboBox::currentIndexChanged), this, &SettingsDialog::providerChanged);
@@ -485,6 +495,7 @@ UiSettings SettingsDialog::settings() const {
     u.maxFindings = maxFindings_->value() == 0 ? 0 : qMax(5, maxFindings_->value());
     u.redact = redact_->isChecked();
     u.includePacketTree = packetTree_->isChecked();
+    u.useTools = useTools_->isChecked();
     const QString keyText = apiKey_->text().trimmed();
     if (UiSettings::isEnvVarName(keyText)) {
         u.keyEnvVar = keyText.startsWith(QLatin1Char('$')) ? keyText.mid(1) : keyText;

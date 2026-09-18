@@ -167,11 +167,68 @@ def test_gui(exe, tshark_exe, caps):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_mcp(exe, caps):
+    """Drives tools/mcp_server.py over stdio the way an agent would."""
+    print("MCP server")
+    script = os.path.join(ROOT, "tools", "mcp_server.py")
+    cap = sorted(f for f in os.listdir(caps) if f.endswith((".pcap", ".pcapng")))
+    if not cap:
+        return check("a capture to analyze", False, caps)
+    path = os.path.join(caps, cap[0])
+    reqs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "analyze_capture", "arguments": {"path": path}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+         "params": {"name": "get_findings", "arguments": {"path": path, "min_severity": "note", "limit": 5}}},
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+         "params": {"name": "run_filter", "arguments": {"path": path, "filter": "frame.number <= 3"}}},
+        {"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+         "params": {"name": "run_filter", "arguments": {"path": path, "filter": "not.a.field == 1"}}},
+        {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+         "params": {"name": "get_report", "arguments": {"path": path}}},
+    ]
+    env = dict(os.environ, AI_INSPECTOR_TSHARK=exe)
+    p = run_text([sys.executable, script], input="\n".join(json.dumps(r) for r in reqs).encode() + b"\n",
+                 env=env, timeout=600)
+    check("self-test", run_text([sys.executable, script, "--self-test"], env=env).returncode == 0)
+    replies = {}
+    for line in p.stdout.splitlines():
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if m.get("id") is not None:
+            replies[m["id"]] = m
+    check("initialize", replies.get(1, {}).get("result", {}).get("serverInfo", {}).get("name") == "ai-inspector",
+          p.stderr[-400:])
+    check("tools/list", len(replies.get(2, {}).get("result", {}).get("tools", [])) >= 6)
+
+    def text(i):
+        r = replies.get(i, {}).get("result", {})
+        return r.get("content", [{}])[0].get("text", ""), r.get("isError", True)
+
+    body, err = text(3)
+    check("analyze_capture", not err and '"frames_analyzed"' in body, body[:300])
+    check("summary omits findings", '"findings_note"' in body, body[:300])
+    body, err = text(4)
+    check("get_findings", not err and '"matched"' in body, body[:300])
+    body, err = text(5)
+    check("run_filter", not err and '"valid": true' in body, body[:300])
+    body, err = text(6)
+    check("invalid filter reported, not raised", not err and '"valid": false' in body, body[:300])
+    body, err = text(7)
+    check("get_report", not err and len(body) > 100, body[:300])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build-dir", default=os.path.join(ROOT, "build-development"))
     ap.add_argument("--captures", help="use existing captures instead of generating")
     ap.add_argument("--gui", action="store_true", help="also run the in-application UI self-test")
+    ap.add_argument("--no-mcp", action="store_true", help="skip the MCP server checks")
     a = ap.parse_args()
 
     caps = a.captures
@@ -184,6 +241,8 @@ def main():
     if not ts:
         sys.exit("tshark not found under " + a.build_dir)
     test_engine(ts, caps)
+    if not a.no_mcp:
+        test_mcp(ts, caps)
     if a.gui:
         ws = find(a.build_dir, "wireshark") or find(a.build_dir, "Wireshark")
         if not ws:

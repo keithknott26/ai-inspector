@@ -32,6 +32,7 @@ add_executable(ui_tests
     native/ui/charts.cpp native/ui/charts.h
     native/ui/chat_view.cpp native/ui/chat_view.h
     native/ui/dashboard.cpp native/ui/dashboard.h
+    native/ui/engine_tools.cpp native/ui/engine_tools.h
     native/ui/redactor.cpp native/ui/redactor.h
     native/ui/settings.cpp native/ui/settings.h)
 target_include_directories(ui_tests PRIVATE native/ui native/common)

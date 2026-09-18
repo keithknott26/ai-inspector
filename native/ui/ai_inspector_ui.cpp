@@ -181,6 +181,9 @@ aiinspector::Host makeHost() {
         return ctl().api ? takeString(ctl().api->report_text())
                          : QStringLiteral("No capture has been analyzed yet. Open or reload a capture file.");
     };
+    h.frameFindingsJson = [](quint32 frame) {
+        return ctl().api ? takeString(ctl().api->frame_findings_json(frame)) : QStringLiteral("[]");
+    };
     h.selectedPacket = []() -> std::optional<aiinspector::SelectedPacket> {
         SelectedResult res;
         if (!plugin_if_get_capture_file(extractSelected, &res) || res.frame == 0) return std::nullopt;

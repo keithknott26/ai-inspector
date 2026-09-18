@@ -8,10 +8,27 @@
 #include <QNetworkRequest>
 #include <QRegularExpression>
 
+#include <algorithm>
+
 namespace aiinspector {
 
 namespace {
-constexpr int MAX_HISTORY_MESSAGES = 12; // 6 exchanges
+constexpr int MAX_HISTORY_MESSAGES = 12;        // 6 exchanges
+constexpr int MAX_TOOL_RESULT_CHARS = 60000;    // per tool result handed back to the model
+
+QJsonObject toolUseBlock(const ToolCall &c) {
+    return QJsonObject{{QStringLiteral("type"), QStringLiteral("tool_use")},
+                       {QStringLiteral("id"), c.id},
+                       {QStringLiteral("name"), c.name},
+                       {QStringLiteral("input"), c.args}};
+}
+
+QString argsSummary(const QJsonObject &args) {
+    const QByteArray j = QJsonDocument(args).toJson(QJsonDocument::Compact);
+    QString s = QString::fromUtf8(j.left(160));
+    if (j.size() > 160) s += QStringLiteral("...");
+    return s == QLatin1String("{}") ? QString() : s;
+}
 } // namespace
 
 QString AiConfig::defaultModel(Provider p) {
@@ -165,7 +182,12 @@ QString AiClient::systemPrompt() {
         "finding ids, frames, counts; say whether each looks malicious, misconfiguration or benign), Protocol notes, "
         "Next steps (concrete checks with display filters), Confidence and gaps.\n"
         "For a single packet, explain its layers, what is normal or abnormal, and what to inspect next.\n"
-        "Be precise and do not invent frames, fields or values that are not in the data.");
+        "Be precise and do not invent frames, fields or values that are not in the data.\n\n"
+        "When tools are offered, use them instead of guessing: the first message may contain only a small slice of "
+        "the capture. Call get_findings to pull findings by severity, category, protocol or text; get_capture_summary "
+        "for counts, the timeline, hosts and inventory; get_frame_findings for one frame; get_report for the full "
+        "text report; validate_filter before you put a display filter in the answer. Make the calls you need (several "
+        "at a time is fine), then answer. Never claim a tool said something it did not.");
 }
 
 QStringList AiClient::parseModelList(Provider provider, const QByteArray &body) {
@@ -195,11 +217,39 @@ void AiClient::resetConversation() {
     history_ = QJsonArray();
 }
 
-QByteArray AiClient::buildRequestBody(const AiConfig &config, const QJsonArray &messages) {
+void AiClient::setTools(QVector<ToolSpec> tools, std::function<ToolResult(const ToolCall &)> handler) {
+    tools_ = std::move(tools);
+    toolHandler_ = std::move(handler);
+}
+
+void AiClient::clearTools() {
+    tools_.clear();
+    toolHandler_ = nullptr;
+}
+
+QByteArray AiClient::buildRequestBody(const AiConfig &config, const QJsonArray &messages,
+                                      const QVector<ToolSpec> &tools) {
     QJsonObject body;
     body.insert(QStringLiteral("model"), config.effectiveModel());
     body.insert(QStringLiteral("max_tokens"), config.effectiveMaxTokens());
     if (config.stream) body.insert(QStringLiteral("stream"), true);
+    if (!tools.isEmpty()) {
+        QJsonArray decl;
+        for (const ToolSpec &t : tools) {
+            if (config.provider == Provider::Anthropic) {
+                decl.append(QJsonObject{{QStringLiteral("name"), t.name},
+                                        {QStringLiteral("description"), t.description},
+                                        {QStringLiteral("input_schema"), t.schema}});
+            } else {
+                decl.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("function")},
+                                        {QStringLiteral("function"),
+                                         QJsonObject{{QStringLiteral("name"), t.name},
+                                                     {QStringLiteral("description"), t.description},
+                                                     {QStringLiteral("parameters"), t.schema}}}});
+            }
+        }
+        body.insert(QStringLiteral("tools"), decl);
+    }
     if (config.provider == Provider::Anthropic) {
         body.insert(QStringLiteral("system"), systemPrompt());
         body.insert(QStringLiteral("messages"), messages);
@@ -210,6 +260,82 @@ QByteArray AiClient::buildRequestBody(const AiConfig &config, const QJsonArray &
         body.insert(QStringLiteral("messages"), all);
     }
     return QJsonDocument(body).toJson(QJsonDocument::Compact);
+}
+
+QVector<ToolCall> AiClient::parseToolCalls(Provider provider, const QByteArray &body) {
+    QVector<ToolCall> calls;
+    const QJsonObject obj = QJsonDocument::fromJson(body).object();
+    if (provider == Provider::Anthropic) {
+        for (const auto &v : obj.value(QStringLiteral("content")).toArray()) {
+            const QJsonObject b = v.toObject();
+            if (b.value(QStringLiteral("type")).toString() != QLatin1String("tool_use")) continue;
+            ToolCall c;
+            c.id = b.value(QStringLiteral("id")).toString();
+            c.name = b.value(QStringLiteral("name")).toString();
+            c.args = b.value(QStringLiteral("input")).toObject();
+            if (!c.name.isEmpty()) calls.append(c);
+        }
+        return calls;
+    }
+    const QJsonObject msg = obj.value(QStringLiteral("choices")).toArray().at(0).toObject()
+                                .value(QStringLiteral("message")).toObject();
+    for (const auto &v : msg.value(QStringLiteral("tool_calls")).toArray()) {
+        const QJsonObject t = v.toObject();
+        const QJsonObject fn = t.value(QStringLiteral("function")).toObject();
+        ToolCall c;
+        c.id = t.value(QStringLiteral("id")).toString();
+        c.name = fn.value(QStringLiteral("name")).toString();
+        c.args = QJsonDocument::fromJson(fn.value(QStringLiteral("arguments")).toString().toUtf8()).object();
+        if (!c.name.isEmpty()) calls.append(c);
+    }
+    return calls;
+}
+
+QJsonObject AiClient::assistantToolMessage(Provider provider, const QString &text, const QVector<ToolCall> &calls) {
+    if (provider == Provider::Anthropic) {
+        QJsonArray content;
+        if (!text.trimmed().isEmpty())
+            content.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("text")}, {QStringLiteral("text"), text}});
+        for (const ToolCall &c : calls) content.append(toolUseBlock(c));
+        return QJsonObject{{QStringLiteral("role"), QStringLiteral("assistant")}, {QStringLiteral("content"), content}};
+    }
+    QJsonArray tc;
+    for (const ToolCall &c : calls) {
+        tc.append(QJsonObject{
+            {QStringLiteral("id"), c.id},
+            {QStringLiteral("type"), QStringLiteral("function")},
+            {QStringLiteral("function"),
+             QJsonObject{{QStringLiteral("name"), c.name},
+                         {QStringLiteral("arguments"), QString::fromUtf8(QJsonDocument(c.args).toJson(QJsonDocument::Compact))}}}});
+    }
+    QJsonObject m{{QStringLiteral("role"), QStringLiteral("assistant")}, {QStringLiteral("tool_calls"), tc}};
+    m.insert(QStringLiteral("content"), text.trimmed().isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(text));
+    return m;
+}
+
+QJsonArray AiClient::toolResultMessages(Provider provider, const QVector<ToolCall> &calls,
+                                        const QVector<ToolResult> &results) {
+    QJsonArray out;
+    if (provider == Provider::Anthropic) {
+        QJsonArray content;
+        for (int i = 0; i < calls.size(); ++i) {
+            const ToolResult r = i < results.size() ? results.at(i) : ToolResult{};
+            content.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("tool_result")},
+                                       {QStringLiteral("tool_use_id"), calls.at(i).id},
+                                       {QStringLiteral("is_error"), r.isError},
+                                       {QStringLiteral("content"), r.content}});
+        }
+        if (!content.isEmpty())
+            out.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), content}});
+        return out;
+    }
+    for (int i = 0; i < calls.size(); ++i) {
+        const ToolResult r = i < results.size() ? results.at(i) : ToolResult{};
+        out.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("tool")},
+                               {QStringLiteral("tool_call_id"), calls.at(i).id},
+                               {QStringLiteral("content"), r.content}});
+    }
+    return out;
 }
 
 void AiClient::ask(const AiConfig &config, const QString &userMessage) {
@@ -228,9 +354,21 @@ void AiClient::ask(const AiConfig &config, const QString &userMessage) {
         return;
     }
 
-    QJsonArray messages = history_;
-    messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), userMessage}});
+    pendingUser_ = userMessage;
+    pendingConfig_ = config;
+    messages_ = history_;
+    messages_.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), userMessage}});
+    answer_.clear();
+    toolRound_ = 0;
+    toolsExhausted_ = false;
+    elapsed_.start();
+    sendRound();
+}
 
+// Issues one HTTP request for the current messages_. Called again after each
+// round of tool calls until the model answers or the round budget runs out.
+void AiClient::sendRound() {
+    const AiConfig &config = pendingConfig_;
     QNetworkRequest req(config.effectiveEndpoint());
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setRawHeader("Accept", config.stream ? "text/event-stream, application/json" : "application/json");
@@ -245,19 +383,20 @@ void AiClient::ask(const AiConfig &config, const QString &userMessage) {
         req.setRawHeader("Authorization", "Bearer " + key);
     }
 
-    pendingUser_ = userMessage;
     pendingProvider_ = config.provider;
     body_.clear();
     sse_.clear();
     streamed_.clear();
     streamError_.clear();
+    streamTools_.clear();
+    streamToolArgs_.clear();
     isStream_ = false;
     streamTruncated_ = false;
     timedOut_ = false;
     cancelled_ = false;
-    elapsed_.start();
     idle_.setInterval(config.effectiveTimeoutSeconds() * 1000);
-    reply_ = nam_->post(req, buildRequestBody(config, messages));
+    const QVector<ToolSpec> tools = (toolsEnabled() && !toolsExhausted_) ? tools_ : QVector<ToolSpec>();
+    reply_ = nam_->post(req, buildRequestBody(config, messages_, tools));
     connect(reply_.data(), &QNetworkReply::readyRead, this, &AiClient::onReadyRead);
     connect(reply_.data(), &QNetworkReply::finished, this, &AiClient::onReplyFinished);
     idle_.start();
@@ -293,10 +432,26 @@ AiClient::StreamEvent AiClient::parseStreamData(Provider provider, const QByteAr
     }
     if (provider == Provider::Anthropic) {
         const QString type = o.value(QStringLiteral("type")).toString();
-        if (type == QLatin1String("content_block_delta")) {
+        if (type == QLatin1String("content_block_start")) {
+            const QJsonObject b = o.value(QStringLiteral("content_block")).toObject();
+            if (b.value(QStringLiteral("type")).toString() == QLatin1String("tool_use")) {
+                ToolDelta td;
+                td.index = o.value(QStringLiteral("index")).toInt(-1);
+                td.id = b.value(QStringLiteral("id")).toString();
+                td.name = b.value(QStringLiteral("name")).toString();
+                ev.toolDeltas.append(td);
+            }
+        } else if (type == QLatin1String("content_block_delta")) {
             const QJsonObject d = o.value(QStringLiteral("delta")).toObject();
-            if (d.value(QStringLiteral("type")).toString() == QLatin1String("text_delta"))
+            const QString dt = d.value(QStringLiteral("type")).toString();
+            if (dt == QLatin1String("text_delta")) {
                 ev.text = d.value(QStringLiteral("text")).toString();
+            } else if (dt == QLatin1String("input_json_delta")) {
+                ToolDelta td;
+                td.index = o.value(QStringLiteral("index")).toInt(-1);
+                td.argsFragment = d.value(QStringLiteral("partial_json")).toString();
+                ev.toolDeltas.append(td);
+            }
         } else if (type == QLatin1String("message_delta")) {
             ev.truncated = o.value(QStringLiteral("delta")).toObject().value(QStringLiteral("stop_reason")).toString()
                            == QLatin1String("max_tokens");
@@ -305,8 +460,21 @@ AiClient::StreamEvent AiClient::parseStreamData(Provider provider, const QByteAr
         }
     } else {
         const QJsonObject choice = o.value(QStringLiteral("choices")).toArray().at(0).toObject();
-        ev.text = choice.value(QStringLiteral("delta")).toObject().value(QStringLiteral("content")).toString();
+        const QJsonObject d = choice.value(QStringLiteral("delta")).toObject();
+        ev.text = d.value(QStringLiteral("content")).toString();
         ev.truncated = choice.value(QStringLiteral("finish_reason")).toString() == QLatin1String("length");
+        int fallback = 0;
+        for (const auto &v : d.value(QStringLiteral("tool_calls")).toArray()) {
+            const QJsonObject t = v.toObject();
+            const QJsonObject fn = t.value(QStringLiteral("function")).toObject();
+            ToolDelta td;
+            td.index = t.value(QStringLiteral("index")).toInt(fallback);
+            td.id = t.value(QStringLiteral("id")).toString();
+            td.name = fn.value(QStringLiteral("name")).toString();
+            td.argsFragment = fn.value(QStringLiteral("arguments")).toString();
+            ev.toolDeltas.append(td);
+            ++fallback;
+        }
     }
     return ev;
 }
@@ -327,6 +495,13 @@ void AiClient::processSseBuffer(bool flush) {
         const StreamEvent ev = parseStreamData(pendingProvider_, line.mid(5));
         if (!ev.error.isEmpty() && streamError_.isEmpty()) streamError_ = ev.error;
         streamTruncated_ = streamTruncated_ || ev.truncated;
+        for (const ToolDelta &td : ev.toolDeltas) {
+            const int idx = td.index < 0 ? 0 : td.index;
+            ToolCall &c = streamTools_[idx];
+            if (!td.id.isEmpty()) c.id = td.id;
+            if (!td.name.isEmpty()) c.name = td.name;
+            if (!td.argsFragment.isEmpty()) streamToolArgs_[idx] += td.argsFragment;
+        }
         if (!ev.text.isEmpty()) {
             QString t = ev.text;
             t.remove(ctrl);
@@ -362,6 +537,9 @@ void AiClient::onReadyRead() {
 
 void AiClient::finishWithError(const QString &error) {
     pendingUser_.clear();
+    pendingConfig_.apiKey.clear();
+    messages_ = QJsonArray();
+    answer_.clear();
     emit failed(error);
 }
 
@@ -436,16 +614,84 @@ void AiClient::onReplyFinished() {
     if (reply->error() != QNetworkReply::NoError && status == 0)
         return finishWithError(QStringLiteral("Network error: %1").arg(reply->errorString()));
 
+    QVector<ToolCall> calls;
     QString text, error;
     if (isStream_) {
         if (!streamError_.isEmpty()) return finishWithError(QStringLiteral("Provider error: %1").arg(streamError_));
-        if (streamed_.trimmed().isEmpty()) return finishWithError(QStringLiteral("The provider returned an empty response."));
+        for (auto it = streamTools_.constBegin(); it != streamTools_.constEnd(); ++it) {
+            ToolCall c = it.value();
+            if (c.name.isEmpty()) continue;
+            c.args = QJsonDocument::fromJson(streamToolArgs_.value(it.key()).toUtf8()).object();
+            calls.append(c);
+        }
+        if (calls.isEmpty() && streamed_.trimmed().isEmpty() && answer_.trimmed().isEmpty())
+            return finishWithError(QStringLiteral("The provider returned an empty response."));
         text = streamed_;
         if (streamTruncated_)
             text += QStringLiteral("\n\n_Response truncated: increase the maximum response tokens in Settings._");
-    } else if (!parseResponse(pendingProvider_, status, body_, text, error)) {
-        return finishWithError(error);
+    } else {
+        calls = parseToolCalls(pendingProvider_, body_);
+        if (!parseResponse(pendingProvider_, status, body_, text, error) && calls.isEmpty())
+            return finishWithError(error);
     }
+
+    if (!calls.isEmpty() && runToolRound(calls)) return; // another round is in flight
+    completeTurn(answer_ + text);
+}
+
+// Runs the requested tools and starts the next round. Returns false when the
+// turn should finish instead (no handler, or the round budget is spent).
+bool AiClient::runToolRound(const QVector<ToolCall> &calls) {
+    if (!toolHandler_ || toolsExhausted_) return false;
+
+    answer_ += streamed_;
+    messages_.append(assistantToolMessage(pendingProvider_, streamed_, calls));
+
+    QVector<ToolResult> results;
+    results.reserve(calls.size());
+    for (const ToolCall &c : calls) {
+        emit toolCall(c.name, argsSummary(c.args));
+        ToolResult r;
+        if (!std::any_of(tools_.cbegin(), tools_.cend(), [&c](const ToolSpec &t) { return t.name == c.name; })) {
+            r.isError = true;
+            r.content = QStringLiteral("No tool named '%1' is available.").arg(c.name);
+        } else {
+            r = toolHandler_(c);
+        }
+        if (r.content.size() > MAX_TOOL_RESULT_CHARS)
+            r.content = r.content.left(MAX_TOOL_RESULT_CHARS) + QStringLiteral("\n... (truncated)");
+        if (r.content.isEmpty()) r.content = QStringLiteral("(no data)");
+        results.append(r);
+        const QString args = argsSummary(c.args);
+        appendTrace(QStringLiteral("_%1 %2%3 - %4_")
+                        .arg(r.isError ? QStringLiteral("&#9888; tool failed:") : QStringLiteral("&#9881; consulted"),
+                             c.name, args.isEmpty() ? QString() : QStringLiteral(" ") + args,
+                             r.isError ? r.content.left(120) : QStringLiteral("%1 characters").arg(r.content.size())));
+    }
+    for (const auto &m : toolResultMessages(pendingProvider_, calls, results)) messages_.append(m);
+
+    if (++toolRound_ >= maxToolRounds_) {
+        // Last chance: ask for an answer with no further tools offered.
+        toolsExhausted_ = true;
+        messages_.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
+                                     {QStringLiteral("content"),
+                                      QStringLiteral("Tool budget reached. Answer now using what you already have, and "
+                                                     "say what you could not check.")}});
+    }
+    sendRound();
+    return true;
+}
+
+// Adds a line to the transcript describing a tool call, so the answer records
+// which capture data was pulled.
+void AiClient::appendTrace(const QString &line) {
+    const QString block = (answer_.endsWith(QLatin1Char('\n')) || answer_.isEmpty() ? QString() : QStringLiteral("\n\n"))
+                          + line + QStringLiteral("\n\n");
+    answer_ += block;
+    emit delta(block);
+}
+
+void AiClient::completeTurn(const QString &text) {
     history_.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), pendingUser_}});
     history_.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("assistant")}, {QStringLiteral("content"), text}});
     while (history_.size() > MAX_HISTORY_MESSAGES) {
@@ -453,6 +699,9 @@ void AiClient::onReplyFinished() {
         history_.removeFirst();
     }
     pendingUser_.clear();
+    pendingConfig_.apiKey.clear();
+    messages_ = QJsonArray();
+    answer_.clear();
     emit finished(text);
 }
 

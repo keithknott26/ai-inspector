@@ -14,6 +14,11 @@
 // Privacy pipeline for every AI request (see send()):
 //   scrubSecrets() -> Redactor::apply() (if enabled) -> AiClient::ask()
 // Answers are shown with Redactor::restore() so real addresses appear locally.
+//
+// The assistant can also pull capture data on demand through EngineTools (see
+// engine_tools.h). Tool arguments are un-redacted on the way in and results go
+// through the same pipeline on the way out, so the model only ever sees
+// placeholders.
 #pragma once
 
 #include "ai_client.h"
@@ -24,6 +29,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <functional>
+#include <memory>
 #include <optional>
 
 class QComboBox;
@@ -44,6 +50,7 @@ namespace aiinspector {
 
 class ChatView;
 class Dashboard;
+class EngineTools;
 
 struct SelectedPacket {
     quint32 frame = 0;
@@ -57,6 +64,8 @@ struct Host {
     std::function<quint64()> generation;
     std::function<QString(quint32 maxFindings)> summaryJson;
     std::function<QString()> reportText;
+    // Findings the engine recorded for one frame, as a JSON array.
+    std::function<QString(quint32 frame)> frameFindingsJson;
     std::function<std::optional<SelectedPacket>()> selectedPacket;
     std::function<void(quint32)> goToFrame;
     std::function<void(const QString &)> applyFilter;
@@ -68,6 +77,7 @@ class InspectorPanel : public QWidget {
     Q_OBJECT
 public:
     explicit InspectorPanel(Host host, QWidget *parent = nullptr);
+    ~InspectorPanel() override;
 
     AiClient *client() const { return client_; }
     ChatView *chat() const { return chat_; }
@@ -94,6 +104,9 @@ private:
     bool generationCurrent() const;
     bool actionAllowed();
     QString captureContext(quint32 maxFindings);
+    // Enables or disables the assistant's tools for this request and returns
+    // the capture context to embed in the message (empty when tools are on).
+    QString prepareTools(const struct UiSettings &settings);
     void populateFindings();
     void applyFindingFilters();
     void showFindingDetail();
@@ -103,6 +116,7 @@ private:
 
     Host host_;
     AiClient *client_;
+    std::unique_ptr<EngineTools> tools_;
     Redactor redactor_;
     quint64 dataGeneration_ = 0;
     quint64 conversationGeneration_ = 0;

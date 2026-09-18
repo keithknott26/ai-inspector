@@ -24,6 +24,8 @@ set(PLUGIN_FILES
 	${AI_INSPECTOR_UI_DIR}/chat_view.h
 	${AI_INSPECTOR_UI_DIR}/dashboard.cpp
 	${AI_INSPECTOR_UI_DIR}/dashboard.h
+	${AI_INSPECTOR_UI_DIR}/engine_tools.cpp
+	${AI_INSPECTOR_UI_DIR}/engine_tools.h
 	${AI_INSPECTOR_UI_DIR}/redactor.cpp
 	${AI_INSPECTOR_UI_DIR}/settings.cpp
 	${AI_INSPECTOR_UI_DIR}/settings.h

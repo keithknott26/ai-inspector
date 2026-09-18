@@ -5,6 +5,7 @@
 #include "charts.h"
 #include "chat_view.h"
 #include "dashboard.h"
+#include "engine_tools.h"
 #include "panel.h"
 #include "redactor.h"
 #include "settings.h"
@@ -511,6 +512,202 @@ private slots:
         qunsetenv("AI_INSPECTOR_KEY_FILE");
     }
 
+    // ---------------------------------------------------------------- tool calling
+    void engineTools() {
+        const QJsonObject summary{
+            {QStringLiteral("capture"), QJsonObject{{QStringLiteral("frames_analyzed"), 120}}},
+            {QStringLiteral("findings"), QJsonArray{
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("tcp.zero_window")}, {QStringLiteral("severity_level"), 3},
+                            {QStringLiteral("category"), QStringLiteral("performance")}, {QStringLiteral("protocol"), QStringLiteral("TCP")},
+                            {QStringLiteral("title"), QStringLiteral("TCP zero window")}},
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("tls.weak_cipher.rc4")}, {QStringLiteral("severity_level"), 4},
+                            {QStringLiteral("category"), QStringLiteral("security")}, {QStringLiteral("protocol"), QStringLiteral("TLS")},
+                            {QStringLiteral("title"), QStringLiteral("Weak cipher")}},
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("dns.slow")}, {QStringLiteral("severity_level"), 2},
+                            {QStringLiteral("category"), QStringLiteral("performance")}, {QStringLiteral("protocol"), QStringLiteral("DNS")},
+                            {QStringLiteral("title"), QStringLiteral("Slow DNS response")}}}}};
+        Host host;
+        host.summaryJson = [&](quint32) { return QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact)); };
+        host.reportText = [] { return QStringLiteral("REPORT BODY"); };
+        host.frameFindingsJson = [](quint32 f) { return QStringLiteral("[{\"frame\":%1}]").arg(f); };
+        host.selectedPacket = [] { return std::optional<SelectedPacket>(SelectedPacket{5, QStringLiteral("Frame 5\n  src 10.0.0.5"), QStringLiteral("[]")}); };
+        host.validateFilter = [](const QString &f, QString *err) {
+            if (f.startsWith(QStringLiteral("tcp"))) return true;
+            if (err) *err = QStringLiteral("no such field");
+            return false;
+        };
+        EngineTools tools(&host);
+
+        auto call = [&](const QString &name, const QJsonObject &args) {
+            ToolCall c;
+            c.name = name;
+            c.args = args;
+            return tools.run(c);
+        };
+        auto json = [](const ToolResult &r) { return QJsonDocument::fromJson(r.content.toUtf8()).object(); };
+
+        // Every declared tool has a name, a description and an object schema.
+        const QVector<ToolSpec> specs = EngineTools::specs();
+        QVERIFY(specs.size() >= 6);
+        for (const ToolSpec &t : specs) {
+            QVERIFY(!t.name.isEmpty());
+            QVERIFY(t.description.size() > 20);
+            QCOMPARE(t.schema.value(QStringLiteral("type")).toString(), QStringLiteral("object"));
+        }
+
+        // Findings filter by severity, category and text, and page.
+        QCOMPARE(json(call(QStringLiteral("get_findings"), {})).value(QStringLiteral("matched")).toInt(), 3);
+        QJsonObject r = json(call(QStringLiteral("get_findings"), QJsonObject{{QStringLiteral("min_severity"), QStringLiteral("warning")}}));
+        QCOMPARE(r.value(QStringLiteral("matched")).toInt(), 2);
+        r = json(call(QStringLiteral("get_findings"), QJsonObject{{QStringLiteral("category"), QStringLiteral("security")}}));
+        QCOMPARE(r.value(QStringLiteral("findings")).toArray().size(), 1);
+        r = json(call(QStringLiteral("get_findings"), QJsonObject{{QStringLiteral("protocol"), QStringLiteral("dns")}}));
+        QCOMPARE(r.value(QStringLiteral("findings")).toArray().at(0).toObject().value(QStringLiteral("id")).toString(),
+                 QStringLiteral("dns.slow"));
+        r = json(call(QStringLiteral("get_findings"), QJsonObject{{QStringLiteral("contains"), QStringLiteral("zero window")}}));
+        QCOMPARE(r.value(QStringLiteral("matched")).toInt(), 1);
+        r = json(call(QStringLiteral("get_findings"), QJsonObject{{QStringLiteral("limit"), 1}, {QStringLiteral("offset"), 2}}));
+        QCOMPARE(r.value(QStringLiteral("returned")).toInt(), 1);
+        QCOMPARE(r.value(QStringLiteral("matched")).toInt(), 3);
+
+        // The summary leaves the findings out unless asked for them.
+        r = json(call(QStringLiteral("get_capture_summary"), {}));
+        QVERIFY(!r.contains(QStringLiteral("findings")));
+        QVERIFY(r.contains(QStringLiteral("findings_note")));
+        QVERIFY(r.value(QStringLiteral("capture")).toObject().contains(QStringLiteral("frames_analyzed")));
+        QVERIFY(json(call(QStringLiteral("get_capture_summary"), QJsonObject{{QStringLiteral("include_findings"), true}}))
+                    .contains(QStringLiteral("findings")));
+
+        // Frames, the report and the selected packet.
+        QVERIFY(call(QStringLiteral("get_frame_findings"), QJsonObject{{QStringLiteral("frame"), 42}}).content.contains(QStringLiteral("\"frame\":42")));
+        QVERIFY(call(QStringLiteral("get_frame_findings"), QJsonObject{{QStringLiteral("frame"), 0}}).isError);
+        QVERIFY(call(QStringLiteral("get_report"), {}).content.contains(QStringLiteral("REPORT BODY")));
+        QVERIFY(call(QStringLiteral("get_selected_packet"), {}).content.contains(QStringLiteral("10.0.0.5")));
+        tools.setIncludePacketTree(false);
+        QVERIFY(!call(QStringLiteral("get_selected_packet"), {}).content.contains(QStringLiteral("10.0.0.5")));
+
+        // Filters are compiled, not guessed.
+        QVERIFY(json(call(QStringLiteral("validate_filter"), QJsonObject{{QStringLiteral("filter"), QStringLiteral("tcp.port == 80")}}))
+                    .value(QStringLiteral("valid")).toBool());
+        r = json(call(QStringLiteral("validate_filter"), QJsonObject{{QStringLiteral("filter"), QStringLiteral("bogus.field")}}));
+        QVERIFY(!r.value(QStringLiteral("valid")).toBool());
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), QStringLiteral("no such field"));
+
+        // Unknown tools fail rather than crash.
+        QVERIFY(call(QStringLiteral("nope"), {}).isError);
+    }
+
+    // The client replays a tool call and re-asks, for both wire formats and
+    // both streaming and non-streaming transports.
+    void toolLoop_data() {
+        QTest::addColumn<int>("provider");
+        QTest::addColumn<bool>("stream");
+        QTest::newRow("anthropic-stream") << int(Provider::Anthropic) << true;
+        QTest::newRow("anthropic-plain") << int(Provider::Anthropic) << false;
+        QTest::newRow("openai-stream") << int(Provider::OpenAI) << true;
+        QTest::newRow("openai-plain") << int(Provider::OpenAI) << false;
+    }
+
+    void toolLoop() {
+        QFETCH(int, provider);
+        QFETCH(bool, stream);
+        AiConfig cfg;
+        cfg.provider = static_cast<Provider>(provider);
+        cfg.apiKey = QStringLiteral("test-key-123");
+        cfg.stream = stream;
+        cfg.endpoint = url(cfg.provider == Provider::Anthropic ? QStringLiteral("/anthropic/v1/messages")
+                                                               : QStringLiteral("/openai/v1/chat/completions"));
+        AiClient client;
+        QStringList seen;
+        client.setTools(EngineTools::specs(), [&](const ToolCall &c) {
+            seen << c.name + QStringLiteral(":") + QString::number(c.args.size());
+            ToolResult r;
+            r.content = QStringLiteral("TOOLDATA for %1").arg(c.name);
+            return r;
+        });
+        QSignalSpy calls(&client, &AiClient::toolCall);
+        QSignalSpy done(&client, &AiClient::finished);
+        QSignalSpy bad(&client, &AiClient::failed);
+        const int before = loggedRequests().size();
+        client.ask(cfg, QStringLiteral("Triage this capture."));
+        QTRY_VERIFY_WITH_TIMEOUT(!done.isEmpty() || !bad.isEmpty(), 15000);
+        QVERIFY2(bad.isEmpty(), qPrintable(bad.value(0).value(0).toString()));
+
+        // One tool call, with its arguments, then a second request carrying the result.
+        QCOMPARE(calls.size(), 1);
+        QCOMPARE(calls.at(0).at(0).toString(), QStringLiteral("get_findings"));
+        QCOMPARE(seen, QStringList{QStringLiteral("get_findings:2")});
+        const auto reqs = loggedRequests();
+        QCOMPARE(reqs.size(), before + 2);
+        const QString first = reqs.at(reqs.size() - 2).value(QStringLiteral("body")).toString();
+        const QString second = reqs.last().value(QStringLiteral("body")).toString();
+        QVERIFY2(first.contains(QStringLiteral("get_capture_summary")), qPrintable(first.left(200)));
+        QVERIFY2(second.contains(QStringLiteral("TOOLDATA for get_findings")), qPrintable(second.left(400)));
+        if (cfg.provider == Provider::Anthropic)
+            QVERIFY(second.contains(QStringLiteral("tool_result")) && second.contains(QStringLiteral("tool_use")));
+        else
+            QVERIFY(second.contains(QStringLiteral("tool_calls")) && second.contains(QStringLiteral("\"role\":\"tool\"")));
+
+        // The answer records what was consulted and keeps the model's text.
+        const QString text = done.at(0).at(0).toString();
+        QVERIFY2(text.contains(QStringLiteral("consulted")) && text.contains(QStringLiteral("get_findings")), qPrintable(text));
+        QVERIFY(text.contains(QStringLiteral("MOCK-")));
+        QCOMPARE(client.conversationTurns(), 1);
+
+        // Wire-format helpers round-trip.
+        ToolCall c;
+        c.id = QStringLiteral("id-1");
+        c.name = QStringLiteral("get_report");
+        const QJsonObject asst = AiClient::assistantToolMessage(cfg.provider, QStringLiteral("thinking"), {c});
+        QCOMPARE(asst.value(QStringLiteral("role")).toString(), QStringLiteral("assistant"));
+        const QJsonArray results = AiClient::toolResultMessages(cfg.provider, {c}, {ToolResult{QStringLiteral("X"), false}});
+        QVERIFY(!results.isEmpty());
+        QVERIFY(QString::fromUtf8(QJsonDocument(results).toJson()).contains(QStringLiteral("id-1")));
+    }
+
+    // With tools on, the first request carries the tool declarations instead of
+    // the capture JSON, and tool results are redacted like everything else.
+    void panelToolCalls() {
+        const QJsonObject summary{
+            {QStringLiteral("capture"), QJsonObject{{QStringLiteral("frames_analyzed"), 12}}},
+            {QStringLiteral("findings"), QJsonArray{
+                QJsonObject{{QStringLiteral("id"), QStringLiteral("tcp.zero_window")}, {QStringLiteral("severity_level"), 4},
+                            {QStringLiteral("category"), QStringLiteral("performance")}, {QStringLiteral("protocol"), QStringLiteral("TCP")},
+                            {QStringLiteral("title"), QStringLiteral("Zero window from 10.0.0.5")}}}}};
+        Host host;
+        host.engineAvailable = [] { return true; };
+        host.generation = [] { return quint64(1); };
+        host.summaryJson = [&](quint32) { return QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact)); };
+        host.reportText = [] { return QStringLiteral("REPORT"); };
+        {
+            UiSettings s = UiSettings::load(false);
+            s.redact = true;
+            s.useTools = true;
+            s.save();
+        }
+        qputenv("AI_INSPECTOR_PROVIDER", "compatible");
+        qputenv("AI_INSPECTOR_ENDPOINT", url(QStringLiteral("/openai/v1/chat/completions")).toUtf8());
+        InspectorPanel p(host);
+        const int before = loggedRequests().size();
+        p.runTriage();
+        QTRY_VERIFY_WITH_TIMEOUT(!p.client()->busy(), 15000);
+        const auto reqs = loggedRequests();
+        QCOMPARE(reqs.size(), before + 2);
+        const QString first = reqs.at(reqs.size() - 2).value(QStringLiteral("body")).toString();
+        const QString second = reqs.last().value(QStringLiteral("body")).toString();
+        // No capture data up front, but the tools are declared.
+        QVERIFY2(!first.contains(QStringLiteral("frames_analyzed")), qPrintable(first.left(300)));
+        QVERIFY(first.contains(QStringLiteral("get_findings")));
+        // The tool result went out redacted.
+        QVERIFY2(second.contains(QStringLiteral("Zero window from IP-1(private)")), qPrintable(second.left(600)));
+        QVERIFY(!second.contains(QStringLiteral("10.0.0.5")));
+        // The transcript shows the real address again and records the call.
+        const QString shown = p.findChild<QTextBrowser *>(QStringLiteral("transcript"))->toPlainText();
+        QVERIFY2(shown.contains(QStringLiteral("get_findings")), qPrintable(shown));
+        qunsetenv("AI_INSPECTOR_PROVIDER");
+        qunsetenv("AI_INSPECTOR_ENDPOINT");
+    }
+
     // ---------------------------------------------------------------- panel with a fake host
     void panel() {
         quint64 generation = 7;
@@ -584,6 +781,7 @@ private slots:
             UiSettings s = UiSettings::load(false);
             s.redact = true;
             s.includePacketTree = true;
+            s.useTools = false; // exercise the single-blob path; tools have their own test
             s.save();
         }
         qputenv("AI_INSPECTOR_PROVIDER", "compatible");

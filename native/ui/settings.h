@@ -35,6 +35,7 @@ struct UiSettings {
     AiConfig ai;
     bool redact = true;
     bool includePacketTree = true;
+    bool useTools = true; // let the assistant pull capture data on demand
     int maxFindings = 0;  // 0 = auto
     QString keyEnvVar;    // name of an environment variable holding the key (e.g. ANTHROPIC_API_KEY)
     QString keySource; // where the key came from (display only)
@@ -85,6 +86,7 @@ private:
     QSpinBox *maxFindings_;
     QCheckBox *redact_;
     QCheckBox *packetTree_;
+    QCheckBox *useTools_;
     QNetworkAccessManager *nam_;
     QPointer<QNetworkReply> modelsReply_;
     bool keyEdited_ = false;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "panel.h"
+
+#include "engine_tools.h"
 #include "charts.h"
 #include "chat_view.h"
 #include "dashboard.h"
@@ -112,7 +114,11 @@ QString filterForHost(const QString &host) {
 }
 } // namespace
 
-InspectorPanel::InspectorPanel(Host host, QWidget *parent) : QWidget(parent), host_(std::move(host)), client_(new AiClient(this)) {
+InspectorPanel::~InspectorPanel() = default;
+
+InspectorPanel::InspectorPanel(Host host, QWidget *parent)
+    : QWidget(parent), host_(std::move(host)), client_(new AiClient(this)),
+      tools_(std::make_unique<EngineTools>(&host_)) {
     setObjectName(QStringLiteral("aiInspectorPanel"));
     setMinimumWidth(380);
     auto *layout = new QVBoxLayout(this);
@@ -387,6 +393,11 @@ InspectorPanel::InspectorPanel(Host host, QWidget *parent) : QWidget(parent), ho
     connect(chat_, &ChatView::goToFrameRequested, this, [this](quint32 frame) {
         if (actionAllowed() && host_.goToFrame) host_.goToFrame(frame);
     });
+    connect(client_, &AiClient::toolCall, this, [this](const QString &name, const QString &args) {
+        busyText_ = args.isEmpty() ? QStringLiteral("Assistant is reading %1...").arg(name)
+                                   : QStringLiteral("Assistant is reading %1 %2...").arg(name, args.left(60));
+        status_->setText(busyText_);
+    });
     connect(client_, &AiClient::delta, this, [this](const QString &text) {
         chat_->appendAssistant(text);
         busyText_ = QStringLiteral("Receiving answer...");
@@ -596,6 +607,33 @@ QString InspectorPanel::captureContext(quint32 maxFindings) {
     return host_.summaryJson ? host_.summaryJson(maxFindings) : QStringLiteral("{}");
 }
 
+// Wires the engine tools into the client for this request. With tools on the
+// message carries no capture data: the model asks for what it needs, which
+// keeps the first request small and lets it drill in.
+QString InspectorPanel::prepareTools(const UiSettings &settings) {
+    if (!settings.useTools) {
+        client_->clearTools();
+        return QStringLiteral("Capture analysis data (JSON):\n%1\n\n")
+            .arg(captureContext(static_cast<quint32>(settings.effectiveMaxFindings())));
+    }
+    tools_->setIncludePacketTree(settings.includePacketTree);
+    tools_->setMaxFindings(qMax(20, settings.effectiveMaxFindings()));
+    const bool redact = settings.redact;
+    client_->setTools(EngineTools::specs(), [this, redact](const ToolCall &call) {
+        // Arguments come back in placeholder space; restore them so the tools
+        // work on real values, then redact the result on the way out.
+        ToolCall real = call;
+        for (auto it = real.args.begin(); it != real.args.end(); ++it)
+            if (it.value().isString()) *it = redactor_.restore(it.value().toString());
+        ToolResult r = tools_->run(real);
+        r.content = scrubSecrets(r.content);
+        if (redact) r.content = redactor_.apply(r.content);
+        return r;
+    });
+    return QStringLiteral("No capture data is included in this message. Use the tools to fetch what you need "
+                          "(start with get_capture_summary and get_findings).\n\n");
+}
+
 void InspectorPanel::send(const QString &shownRequest, const QString &userMessage) {
     updateModelLabel();
     const UiSettings settings = UiSettings::load();
@@ -624,9 +662,9 @@ void InspectorPanel::runTriage() {
     redactor_.reset();
     conversationGeneration_ = host_.generation ? host_.generation() : 0;
     const UiSettings s = UiSettings::load();
+    const QString context = prepareTools(s);
     send(QStringLiteral("Triage this capture"),
-         QStringLiteral("Capture analysis data (JSON):\n%1\n\nAnalyst request: Triage this capture.")
-             .arg(captureContext(static_cast<quint32>(s.effectiveMaxFindings()))));
+         QStringLiteral("%1Analyst request: Triage this capture.").arg(context));
 }
 
 void InspectorPanel::explainSelectedPacket() {
@@ -653,9 +691,14 @@ void InspectorPanel::explainSelectedPacket() {
     const QString request = q.isEmpty() ? QStringLiteral("Explain packet %1").arg(pkt->frame)
                                         : QStringLiteral("About packet %1: %2").arg(pkt->frame).arg(q);
     // Capture context is only sent when the conversation does not already have it.
-    const QString context = client_->conversationTurns() > 0
-        ? QString()
-        : QStringLiteral("Capture analysis data (JSON):\n%1\n\n").arg(captureContext(static_cast<quint32>(qMin(s.effectiveMaxFindings(), 30))));
+    QString context = prepareTools(s);
+    if (s.useTools) {
+        send(request, QStringLiteral("%1The analyst has selected frame %2; get_selected_packet returns its decoded "
+                                     "tree and findings.\n\nAnalyst request: %3")
+                          .arg(context).arg(pkt->frame).arg(request));
+        return;
+    }
+    if (client_->conversationTurns() > 0) context.clear();
     send(request, QStringLiteral("%1Selected packet %2 findings (JSON):\n%3\n\nSelected packet %2 decoded tree:\n%4\n\nAnalyst request: %5")
                       .arg(context).arg(pkt->frame)
                       .arg(pkt->findingsJson.isEmpty() ? QStringLiteral("[]") : pkt->findingsJson, tree, request));
@@ -673,11 +716,11 @@ void InspectorPanel::askQuestion() {
         conversationGeneration_ = gen;
     }
     const UiSettings s = UiSettings::load();
+    const QString context = prepareTools(s);
     if (client_->conversationTurns() > 0) {
         send(q, QStringLiteral("Follow-up question: %1").arg(q));
     } else {
-        send(q, QStringLiteral("Capture analysis data (JSON):\n%1\n\nAnalyst question: %2")
-                    .arg(captureContext(static_cast<quint32>(s.effectiveMaxFindings())), q));
+        send(q, QStringLiteral("%1Analyst question: %2").arg(context, q));
     }
 }
 

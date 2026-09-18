@@ -7,6 +7,23 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-17
+
+### Added
+- **The assistant pulls capture data on demand.** Instead of one large JSON block in the
+  first message, it calls back into the engine: `get_findings` (filtered by severity,
+  category, protocol or text, with paging), `get_capture_summary`, `get_frame_findings`,
+  `get_selected_packet`, `get_report` and `validate_filter`. Requests start small, answers
+  can drill into whatever the question needs, and the transcript records which data was
+  consulted. Works with Anthropic and OpenAI tool calling, streaming or not; tool arguments
+  are un-redacted on the way in and results redacted on the way out, so the model still only
+  sees placeholders. A Settings checkbox turns it off for models without tool calling.
+- **MCP server** (`tools/mcp_server.py`): the engine over the Model Context Protocol, so an
+  agent can analyze a capture without opening Wireshark. Tools: `analyze_capture`,
+  `get_findings`, `get_frame_findings`, `run_filter`, `get_frame`, `get_report`. Single file,
+  no third-party dependencies, local and read-only, with `--self-test` and an
+  `AI_INSPECTOR_ROOTS` allowlist. See `docs/mcp.md`.
+
 ## [1.2.1] - 2026-09-17
 
 ### Fixed
