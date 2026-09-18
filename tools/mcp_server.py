@@ -48,6 +48,27 @@ class ToolError(Exception):
     """A failure the model should see and can act on."""
 
 
+class TsharkError(ToolError):
+    """TShark exited non-zero. Carries the exit code so callers can tell an
+    invalid display filter (exit 4) from a real failure."""
+
+    def __init__(self, returncode, message):
+        super().__init__("tshark failed (exit %d): %s" % (returncode, message or "no message"))
+        self.returncode = returncode
+        self.message = message
+
+
+# Chatter TShark prints before it gets to the point.
+NOISE = ("JSON Dictionary", "Running as user", "This could be dangerous", "Capturing on ")
+
+
+def clean_stderr(text):
+    """Drops TShark's startup chatter so only the real message is left."""
+    keep = [l for l in text.splitlines()
+            if l.strip() and not l.lstrip().startswith("** (") and not any(n in l for n in NOISE)]
+    return "\n".join(keep).strip() or text.strip()
+
+
 # --------------------------------------------------------------------- tshark
 
 def tshark_path():
@@ -105,9 +126,9 @@ def run_tshark(args, timeout=None):
     except OSError as e:
         raise ToolError("Could not run tshark: %s" % e)
     out = p.stdout[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
-    err = p.stderr[:20000].decode("utf-8", "replace").strip()
+    err = clean_stderr(p.stderr[:20000].decode("utf-8", "replace"))
     if p.returncode != 0:
-        raise ToolError("tshark failed (exit %d): %s" % (p.returncode, err or "no message"))
+        raise TsharkError(p.returncode, err)
     return out, err
 
 
@@ -317,11 +338,14 @@ def call_tool(name, args):
             cmd += ["-e", f]
         try:
             out, err = run_tshark(cmd)
-        except ToolError as e:
+        except TsharkError as e:
             # A filter the compiler rejects is an answer, not a server failure.
-            if "expression is invalid" in str(e) or '"%s" is neither' % expr in str(e) or "syntax error" in str(e).lower():
-                reason = str(e).split(":", 2)[-1].strip()
-                return json.dumps({"filter": expr, "valid": False, "reason": reason, "packets": []}, indent=1)
+            # TShark exits 4 for a bad command line, and the filter is the only
+            # part of this command line the model controls.
+            if e.returncode == 4:
+                return json.dumps({"filter": expr, "valid": False,
+                                   "reason": e.message.replace("tshark: ", "", 1).strip(),
+                                   "packets": []}, indent=1)
             raise
         lines = out.splitlines()
         header = lines[0].split("\t") if lines else fields
