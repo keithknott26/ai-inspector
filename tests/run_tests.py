@@ -175,6 +175,13 @@ def test_mcp(exe, caps):
     if not cap:
         return check("a capture to analyze", False, caps)
     path = os.path.join(caps, cap[0])
+    # Ask the native engine for a frame with findings, then check that the MCP
+    # JSON path agrees with its field output (the stock-TShark tests use a fixture).
+    finding_probe = tshark(exe, ["-n", "-r", path, "-Y", "ai_inspector.id", "-T", "fields",
+                                "-e", "frame.number", "-e", "ai_inspector.id"])
+    finding_rows = [line.split("\t", 1) for line in finding_probe.stdout.splitlines() if "\t" in line]
+    finding_frame = int(finding_rows[0][0]) if finding_rows else 1
+    finding_ids = finding_rows[0][1].split(",") if finding_rows else []
     reqs = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -189,6 +196,8 @@ def test_mcp(exe, caps):
          "params": {"name": "run_filter", "arguments": {"path": path, "filter": "not.a.field == 1"}}},
         {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
          "params": {"name": "get_report", "arguments": {"path": path}}},
+        {"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+         "params": {"name": "get_frame_findings", "arguments": {"path": path, "frame": finding_frame}}},
     ]
     env = dict(os.environ, AI_INSPECTOR_TSHARK=exe)
     p = run_text([sys.executable, script], input="\n".join(json.dumps(r) for r in reqs).encode() + b"\n",
@@ -221,6 +230,15 @@ def test_mcp(exe, caps):
     check("invalid filter reported, not raised", not err and '"valid": false' in body, body[:300])
     body, err = text(7)
     check("get_report", not err and len(body) > 100, body[:300])
+    body, err = text(8)
+    try:
+        findings = json.loads(body)["findings"]
+        matches = ([f["id"] for f in findings] == finding_ids
+                   and all(f["summary"] and f["severity"] and f["category"] for f in findings))
+    except (ValueError, KeyError, TypeError):
+        matches = False
+    check("get_frame_findings agrees with native engine",
+          finding_probe.returncode == 0 and bool(finding_ids) and not err and matches, body[:300])
 
 
 def main():

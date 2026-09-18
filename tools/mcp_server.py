@@ -4,7 +4,8 @@
 
 Speaks the Model Context Protocol over stdio (JSON-RPC 2.0, no third-party
 packages) and answers every call by running TShark with the AI Inspector engine
-plugin loaded. Nothing is sent anywhere: the analysis is local and read-only.
+plugin loaded. Analysis is local and read-only; results go to the MCP client,
+which may forward them to its configured AI provider.
 
 Tools:
   analyze_capture     capture-level summary (counts, timeline, hosts, inventory)
@@ -17,7 +18,7 @@ Tools:
 Configuration:
   AI_INSPECTOR_TSHARK   tshark binary to use (default: the development build, then PATH)
   AI_INSPECTOR_PLUGINS  extra plugin directory passed to tshark
-  AI_INSPECTOR_ROOTS    ':'-separated directories; captures must live under one
+  AI_INSPECTOR_ROOTS    os.pathsep-separated directories; captures must live under one
                         of them (default: any readable path)
   AI_INSPECTOR_TIMEOUT  seconds per tshark run (default 120)
 
@@ -27,10 +28,12 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -39,6 +42,8 @@ SERVER_NAME = "ai-inspector"
 SERVER_VERSION = "1.3.0"  # keep in step with cmake/AIInspectorVersion.cmake
 
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_STDERR_BYTES = 20000
+MAX_INPUT_CHARS = 1024 * 1024
 SEVERITIES = {"info": 1, "note": 2, "warning": 3, "warn": 3, "error": 4}
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -113,20 +118,65 @@ def _under(path, root):
 
 
 def run_tshark(args, timeout=None):
-    cmd = [tshark_path()]
+    """Drain both pipes concurrently, enforcing limits before buffering output."""
+    cmd = [tshark_path(), "-n"]
     plugins = os.environ.get("AI_INSPECTOR_PLUGINS")
     if plugins:
         cmd += ["--plugin-dir", plugins]
     cmd += args
     try:
-        p = subprocess.run(cmd, capture_output=True,
-                           timeout=timeout or float(os.environ.get("AI_INSPECTOR_TIMEOUT", "120")))
-    except subprocess.TimeoutExpired:
-        raise ToolError("tshark did not finish in time. Try a smaller capture or raise AI_INSPECTOR_TIMEOUT.")
+        seconds = float(timeout if timeout is not None else os.environ.get("AI_INSPECTOR_TIMEOUT", "120"))
+    except (TypeError, ValueError):
+        raise ToolError("AI_INSPECTOR_TIMEOUT must be a positive, finite number.")
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ToolError("AI_INSPECTOR_TIMEOUT must be a positive, finite number.")
+
+    buffers = [bytearray(), bytearray()]
+    failures = []
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, bufsize=0)
     except OSError as e:
         raise ToolError("Could not run tshark: %s" % e)
-    out = p.stdout[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
-    err = clean_stderr(p.stderr[:20000].decode("utf-8", "replace"))
+
+    def drain(pipe, index, limit, label):
+        try:
+            while True:
+                chunk = pipe.read(65536)
+                if not chunk:
+                    break
+                if len(buffers[index]) + len(chunk) > limit:
+                    failures.append("tshark %s exceeded %d bytes. Use a narrower filter or smaller capture."
+                                    % (label, limit))
+                    p.kill()
+                    break
+                buffers[index].extend(chunk)
+        except OSError as e:
+            failures.append("Could not read tshark %s: %s" % (label, e))
+            p.kill()
+        finally:
+            pipe.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(p.stdout, 0, MAX_OUTPUT_BYTES, "output")),
+        threading.Thread(target=drain, args=(p.stderr, 1, MAX_STDERR_BYTES, "stderr")),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        p.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        raise ToolError("tshark did not finish in time. Try a smaller capture or raise AI_INSPECTOR_TIMEOUT.")
+    finally:
+        if p.poll() is None:
+            p.kill()
+        p.wait()
+        for reader in readers:
+            reader.join()
+    if failures:
+        raise ToolError(failures[0])
+    out = buffers[0].decode("utf-8", "replace")
+    err = clean_stderr(buffers[1].decode("utf-8", "replace"))
     if p.returncode != 0:
         raise TsharkError(p.returncode, err)
     return out, err
@@ -286,8 +336,49 @@ TOOLS = [
 DEFAULT_FIELDS = ["frame.number", "frame.time_relative", "ip.src", "ip.dst", "_ws.col.protocol", "_ws.col.info"]
 
 
+def validate_arguments(name, args):
+    """Validate the simple tool schemas without adding a JSON Schema dependency."""
+    tool = next((t for t in TOOLS if t["name"] == name), None)
+    if tool is None:
+        raise ToolError("No tool named '%s'." % name)
+    if not isinstance(args, dict):
+        raise ToolError("Tool arguments must be an object.")
+    schema = tool["inputSchema"]
+    for key in schema.get("required", []):
+        if key not in args:
+            raise ToolError("Missing required argument: %s." % key)
+    types = {"string": str, "integer": int, "boolean": bool, "array": list}
+    for key, spec in schema["properties"].items():
+        if key not in args:
+            continue
+        value = args[key]
+        if type(value) is not types[spec["type"]]:
+            raise ToolError("%s must be of type %s." % (key, spec["type"]))
+        if spec["type"] == "array" and any(not isinstance(item, str) or not item.strip() for item in value):
+            raise ToolError("%s must contain non-empty field names." % key)
+
+
+def packet_layers(text):
+    """Parse selected-field JSON; never treat malformed output as an empty result."""
+    try:
+        packets = json.loads(text)
+        if not isinstance(packets, list):
+            raise ValueError("expected a packet array")
+        layers = [packet["_source"]["layers"] for packet in packets]
+        if any(not isinstance(layer, dict) for layer in layers):
+            raise ValueError("expected field objects")
+        for layer in layers:
+            for values in layer.values():
+                if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+                    raise ValueError("expected arrays of field values")
+        return layers
+    except (ValueError, KeyError, TypeError, RecursionError) as e:
+        raise ToolError("TShark's packet JSON could not be parsed: %s" % e)
+
+
 def call_tool(name, args):
-    args = args or {}
+    args = {} if args is None else args
+    validate_arguments(name, args)
     if name == "analyze_capture":
         data = dict(summary(capture_path(args.get("path"))))
         if not args.get("include_findings"):
@@ -304,25 +395,20 @@ def call_tool(name, args):
         frame = int(args.get("frame") or 0)
         if frame <= 0:
             raise ToolError("Pass a frame number greater than zero.")
-        out, _ = run_tshark(["-r", str(path), "-Y", "frame.number == %d" % frame, "-T", "fields",
+        out, _ = run_tshark(["-r", str(path), "-Y", "frame.number == %d" % frame, "-T", "json",
                              "-e", "ai_inspector.id", "-e", "ai_inspector.severity",
-                             "-e", "ai_inspector.category", "-e", "ai_inspector.summary",
-                             "-E", "separator=|"])
-        rows = [r for r in out.splitlines() if r.strip(" |")]
-        if not rows:
-            return json.dumps({"frame": frame, "findings": []}, indent=1)
+                             "-e", "ai_inspector.category", "-e", "ai_inspector.finding"])
         findings = []
-        for row in rows:
-            parts = row.split("|")
-            ids = (parts[0] if parts else "").split(",")
-            sevs = (parts[1] if len(parts) > 1 else "").split(",")
-            cats = (parts[2] if len(parts) > 2 else "").split(",")
-            texts = (parts[3] if len(parts) > 3 else "").split(",")
-            for i, fid in enumerate(x for x in ids if x):
+        for layer in packet_layers(out):
+            ids, sevs, cats, texts = [layer.get("ai_inspector." + key, [])
+                                     for key in ("id", "severity", "category", "finding")]
+            # All four fields are emitted once per finding by the engine. Fail
+            # explicitly if that contract changes instead of misaligning evidence.
+            if len({len(ids), len(sevs), len(cats), len(texts)}) != 1:
+                raise ToolError("The engine returned mismatched finding fields.")
+            for fid, sev, cat, text in zip(ids, sevs, cats, texts):
                 findings.append({"id": fid,
-                                 "severity": sevs[i] if i < len(sevs) else "",
-                                 "category": cats[i] if i < len(cats) else "",
-                                 "summary": texts[i] if i < len(texts) else ""})
+                                 "severity": sev, "category": cat, "summary": text})
         return json.dumps({"frame": frame, "findings": findings}, indent=1)
 
     if name == "run_filter":
@@ -332,26 +418,25 @@ def call_tool(name, args):
             raise ToolError("Pass a display filter.")
         fields = [str(f) for f in (args.get("fields") or DEFAULT_FIELDS) if str(f).strip()][:20]
         limit = max(1, min(int(args.get("limit", 50) or 50), 500))
-        cmd = ["-r", str(path), "-Y", expr, "-T", "fields", "-E", "separator=\t", "-E", "header=y",
-               "-c", str(limit * 4)]
+        # -c caps INPUT packets, including nonmatches. Scan the whole capture;
+        # limit only the returned rows, and report resource failures as errors.
+        cmd = ["-r", str(path), "-Y", expr, "-T", "json"]
         for f in fields:
             cmd += ["-e", f]
         try:
             out, err = run_tshark(cmd)
         except TsharkError as e:
             # A filter the compiler rejects is an answer, not a server failure.
-            # TShark exits 4 for a bad command line, and the filter is the only
-            # part of this command line the model controls.
-            if e.returncode == 4:
+            # Invalid requested fields are tool errors, not invalid filters.
+            if e.returncode == 4 and "Some fields aren't valid" not in e.message:
                 return json.dumps({"filter": expr, "valid": False,
                                    "reason": e.message.replace("tshark: ", "", 1).strip(),
                                    "packets": []}, indent=1)
             raise
-        lines = out.splitlines()
-        header = lines[0].split("\t") if lines else fields
-        rows = [dict(zip(header, l.split("\t"))) for l in lines[1:limit + 1]]
+        layers = packet_layers(out)
+        rows = [{field: ",".join(layer.get(field, [])) for field in fields} for layer in layers[:limit]]
         return json.dumps({"filter": expr, "valid": True, "returned": len(rows),
-                           "truncated": len(lines) - 1 > len(rows), "packets": rows}, indent=1)
+                           "scan_complete": True, "truncated": len(layers) > len(rows), "packets": rows}, indent=1)
 
     if name == "get_frame":
         path = capture_path(args.get("path"))
@@ -361,13 +446,15 @@ def call_tool(name, args):
         out, _ = run_tshark(["-r", str(path), "-Y", "frame.number == %d" % frame, "-V"])
         if not out.strip():
             raise ToolError("Frame %d is not in this capture." % frame)
-        return out[:200000]
+        return out if len(out) <= 200000 else out[:200000] + "\n... (truncated)"
 
     if name == "get_report":
         path = capture_path(args.get("path"))
         summary(path)  # surfaces a missing plugin with a useful message
         out, _ = run_tshark(["-r", str(path), "-q", "-z", "ai_inspector,report"])
-        return out[:200000] or "The engine produced no report for this capture."
+        if len(out) > 200000:
+            return out[:200000] + "\n... (truncated)"
+        return out or "The engine produced no report for this capture."
 
     raise ToolError("No tool named '%s'." % name)
 
@@ -384,9 +471,20 @@ def error(rid, code, message):
 
 def handle(msg):
     """Returns a response object, or None for notifications."""
+    if not isinstance(msg, dict):
+        return error(None, -32600, "Invalid Request: expected an object.")
     rid = msg.get("id")
+    if rid is not None and type(rid) not in (str, int):
+        return error(None, -32600, "Invalid Request: id must be a string or integer.")
     method = msg.get("method")
-    params = msg.get("params") or {}
+    if msg.get("jsonrpc") != "2.0" or not isinstance(method, str) or not method:
+        return error(rid, -32600, "Invalid Request: expected jsonrpc 2.0 and a method.")
+    # Notifications must not produce responses or accidentally execute tools.
+    if "id" not in msg:
+        return None
+    params = msg.get("params", {})
+    if not isinstance(params, dict):
+        return error(rid, -32602, "Invalid params: expected an object.")
 
     if method == "initialize":
         asked = params.get("protocolVersion")
@@ -406,6 +504,10 @@ def handle(msg):
         return result(rid, {"tools": TOOLS})
     if method == "tools/call":
         name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return error(rid, -32602, "Invalid params: expected a tool name.")
+        if "arguments" in params and not isinstance(params["arguments"], dict):
+            return error(rid, -32602, "Invalid params: arguments must be an object.")
         try:
             text = call_tool(name, params.get("arguments"))
             return result(rid, {"content": [{"type": "text", "text": text}], "isError": False})
@@ -422,21 +524,31 @@ def handle(msg):
 def serve(stdin=None, stdout=None):
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
-    for line in stdin:
+    while True:
+        line = stdin.readline(MAX_INPUT_CHARS + 1)
+        if not line:
+            break
+        if len(line) > MAX_INPUT_CHARS:
+            # Drain this message in bounded chunks, preserving the next request.
+            while line and not line.endswith("\n"):
+                line = stdin.readline(MAX_INPUT_CHARS + 1)
+            stdout.write(json.dumps(error(None, -32600, "Request exceeds the input size limit.")) + "\n")
+            stdout.flush()
+            continue
         line = line.strip()
         if not line:
             continue
         try:
             msg = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             stdout.write(json.dumps(error(None, -32700, "Parse error")) + "\n")
             stdout.flush()
             continue
-        for one in (msg if isinstance(msg, list) else [msg]):
-            reply = handle(one)
-            if reply is not None:
-                stdout.write(json.dumps(reply) + "\n")
-                stdout.flush()
+        # The advertised MCP revision uses individual messages, not batches.
+        reply = handle(msg)
+        if reply is not None:
+            stdout.write(json.dumps(reply) + "\n")
+            stdout.flush()
 
 
 def self_test():

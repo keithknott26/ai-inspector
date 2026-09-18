@@ -64,6 +64,7 @@ detect the build directory. `run-wireshark.sh` sets `WIRESHARK_PLUGIN_DIR` and l
 
 | Suite | Command |
 |---|---|
+| MCP (no Qt or Wireshark needed) | `python3 tests/test_mcp_server.py -v` |
 | Unit | `cmake -S . -B build-tests -G Ninja && cmake --build build-tests && ctest --test-dir build-tests` |
 | Integration | `python3 tests/run_tests.py --build-dir build-development [--gui]` |
 | Test captures only | `python3 tools/make-test-captures.py /tmp/ai-inspector-captures` |

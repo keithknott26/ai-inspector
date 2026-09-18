@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: MCP tests
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install stock TShark for real-packet regressions
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tshark
+          echo "MCP_TEST_TSHARK=tshark" >> "$GITHUB_ENV"
+      - name: Run MCP regressions
+        run: python tests/test_mcp_server.py -v
