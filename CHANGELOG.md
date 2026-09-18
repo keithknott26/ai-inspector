@@ -21,6 +21,8 @@ All notable changes to AI Inspector. The format follows
   and reap the process instead of silently returning partial output.
 
 ### Added
+- Automated Linux native-integration CI builds the pinned Wireshark and both
+  plugins, then runs unit, MCP, and in-app UI tests with saved diagnostic logs.
 - Dependency-free MCP regression tests, CTest integration, and a Linux/Windows/macOS
   GitHub Actions workflow, including real-packet tests on Linux.
 

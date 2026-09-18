@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Native integration
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-integration.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "native/**"
+      - "tests/**"
+      - "tools/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/native-integration.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "native/**"
+      - "tests/**"
+      - "tools/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native:
+    name: Native engine, MCP, and GUI (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPILERCHECK: content
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential cmake ninja-build git ca-certificates python3 python3-pip python3-venv \
+            qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libqt6core5compat6-dev qt6-multimedia-dev libqt6svg6-dev libxkbcommon-dev \
+            libglib2.0-dev libpcap-dev libgcrypt20-dev libc-ares-dev libpcre2-dev \
+            libspeexdsp-dev zlib1g-dev libnghttp2-dev libxml2-dev libzstd-dev liblz4-dev \
+            libsnappy-dev flex bison ccache
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: native-ubuntu24-${{ runner.arch }}-v1-${{ hashFiles('cmake/AIInspectorVersion.cmake') }}-${{ github.sha }}
+          restore-keys: |
+            native-ubuntu24-${{ runner.arch }}-v1-${{ hashFiles('cmake/AIInspectorVersion.cmake') }}-
+
+      - name: Fetch pinned Wireshark
+        run: sh tools/fetch-wireshark.sh
+
+      - name: Build and run unit, native MCP, and in-app UI tests
+        run: |
+          set -o pipefail
+          sh tools/build-development.sh --jobs 2 --gui-test 2>&1 | tee native-validation.log
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Save build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-integration-logs-${{ github.run_attempt }}
+          path: |
+            native-validation.log
+            build-development/CMakeCache.txt
+            build-development/CMakeFiles/CMakeConfigureLog.yaml
+            build-development/ai-inspector-tests/Testing/Temporary/
+          if-no-files-found: ignore
+          retention-days: 14
