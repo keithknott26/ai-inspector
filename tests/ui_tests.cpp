@@ -391,6 +391,25 @@ private slots:
         chat.appendAssistant(QStringLiteral("## Head\nSee frame 42 and `tcp.port == 443`.\n\n```chart\n{\"type\":\"donut\",\"labels\":[\"a\",\"b\"],"));
         QTest::qWait(150);
         QVERIFY(chat.toPlainText().contains(QStringLiteral("Preparing chart")));
+        // Half-arrived blocks are held back so the layout (and the scroll bar)
+        // does not lurch when they complete a tick later.
+        {
+            ChatView c2;
+            c2.resize(600, 400);
+            c2.beginAssistant();
+            c2.appendAssistant(QStringLiteral("Body text.\n\n```\nhalf a code block"));
+            QTest::qWait(200);
+            QVERIFY2(!c2.toPlainText().contains(QStringLiteral("half a code block")), qPrintable(c2.toPlainText()));
+            QVERIFY(c2.toPlainText().contains(QStringLiteral("Body text.")));
+            c2.appendAssistant(QStringLiteral("\n```\n"));
+            QTest::qWait(200);
+            QVERIFY2(c2.toPlainText().contains(QStringLiteral("half a code block")), qPrintable(c2.toPlainText()));
+            // A partial table row waits; plain prose does not.
+            c2.appendAssistant(QStringLiteral("more prose\n| Finding | Fram"));
+            QTest::qWait(200);
+            QVERIFY(c2.toPlainText().contains(QStringLiteral("more prose")));
+            QVERIFY2(!c2.toPlainText().contains(QStringLiteral("Fram")), qPrintable(c2.toPlainText()));
+        }
         chat.finishAssistant(QStringLiteral("## Head\nSee frame 42 and `tcp.port == 443`.\n\n```chart\n{\"type\":\"donut\",\"labels\":[\"a\",\"b\"],\"values\":[1,2]}\n```\n<img src=\"http://evil/x.png\">"));
         QCOMPARE(chat.chartCount(), 1);
         QVERIFY(chat.toPlainText().contains(QStringLiteral("<img")));  // raw HTML is shown as text, never interpreted

@@ -29,7 +29,9 @@ ChatView::ChatView(QWidget *parent) : QTextBrowser(parent) {
     setFrameShape(QFrame::NoFrame);
     document()->setDocumentMargin(10);
     renderTimer_.setSingleShot(true);
-    renderTimer_.setInterval(90);
+    // Streamed text arrives in bursts; a fixed cadence keeps the relayout (and
+    // so the scroll bar) moving smoothly instead of in jerks.
+    renderTimer_.setInterval(120);
     connect(&renderTimer_, &QTimer::timeout, this, &ChatView::render);
     connect(this, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
         if (url.scheme() == QLatin1String("wsfilter")) {
@@ -57,34 +59,37 @@ QVariant ChatView::loadResource(int type, const QUrl &name) {
 void ChatView::changeEvent(QEvent *event) {
     if (event->type() == QEvent::PaletteChange) {
         charts_.clear();
+        for (auto &m : messages_) m.cachedHtml.clear();
         render();
     }
     QTextBrowser::changeEvent(event);
 }
 
 void ChatView::addUser(const QString &text) {
-    messages_.push_back({Message::User, text, false});
+    messages_.push_back({Message::User, text, false, {}});
     render();
 }
 
 void ChatView::beginAssistant() {
-    messages_.push_back({Message::Assistant, QString(), true});
+    messages_.push_back({Message::Assistant, QString(), true, {}});
     render();
 }
 
 void ChatView::appendAssistant(const QString &delta) {
     if (messages_.isEmpty() || messages_.last().role != Message::Assistant || !messages_.last().streaming) beginAssistant();
     messages_.last().text += delta;
+    messages_.last().cachedHtml.clear();
     scheduleRender();
 }
 
 void ChatView::finishAssistant(const QString &fullText) {
     if (messages_.isEmpty() || messages_.last().role != Message::Assistant || !messages_.last().streaming)
-        messages_.push_back({Message::Assistant, QString(), true});
+        messages_.push_back({Message::Assistant, QString(), true, {}});
     // The transform (restoring local addresses) is applied once, with the
     // mapping that was valid for this answer.
     messages_.last().text = transform_ ? transform_(fullText) : fullText;
     messages_.last().streaming = false;
+    messages_.last().cachedHtml.clear();
     renderTimer_.stop();
     render();
 }
@@ -94,7 +99,7 @@ void ChatView::addError(const QString &text) {
         messages_.last().streaming = false;
         if (messages_.last().text.trimmed().isEmpty()) messages_.removeLast();
     }
-    messages_.push_back({Message::Error, text, false});
+    messages_.push_back({Message::Error, text, false, {}});
     renderTimer_.stop();
     render();
 }
@@ -184,7 +189,39 @@ void ChatView::scheduleRender() {
 //   3. Markdown -> HTML with raw HTML disabled (MarkdownNoHTML)
 // Links use private schemes handled in the anchorClicked handler; loadResource()
 // refuses everything else, so model output can never load remote content.
-QString ChatView::markdownToHtml(QString md, int messageIndex, QStringList *filters) {
+// Markdown that is still arriving can be momentarily unbalanced: an opened
+// ``` fence turns the rest of the answer into a code block, a half-typed table
+// row becomes a one-cell table. Each flips back a tick later, and the document
+// height (and the scroll bar with it) lurches both times. Holding the unfinished
+// tail back until it is complete costs nothing visually and keeps the layout steady.
+QString ChatView::hideIncompleteBlocks(const QString &md) {
+    QString out = md;
+    // An odd number of fences means one is still open.
+    int fences = 0;
+    qsizetype lastFence = -1;
+    for (qsizetype i = out.indexOf(QStringLiteral("```")); i >= 0; i = out.indexOf(QStringLiteral("```"), i + 3)) {
+        ++fences;
+        lastFence = i;
+    }
+    // An open ```chart fence is left alone: the chart step below replaces it
+    // with a fixed-height "Preparing chart..." line, which is steadier than
+    // hiding it and better tells the analyst what is coming.
+    if (fences % 2 == 1 && lastFence >= 0
+        && !QStringView{out}.sliced(lastFence).startsWith(QLatin1String("```chart")))
+        out = out.left(lastFence);
+
+    // A final line with no newline yet is only held back when it opens a block
+    // construct; plain prose keeps streaming word by word.
+    const qsizetype nl = out.lastIndexOf(QLatin1Char('\n'));
+    const QString tail = out.mid(nl + 1);
+    const QString lead = tail.trimmed();
+    static const QRegularExpression blockStart(QStringLiteral("^([|>#]|[-*+]\\s|\\d+[.)]\\s|!\\[|---)"));
+    if (!lead.isEmpty() && blockStart.match(lead).hasMatch()) out = out.left(nl + 1);
+    return out;
+}
+
+QString ChatView::markdownToHtml(QString md, int messageIndex, QStringList *filters, bool streaming) {
+    if (streaming) md = hideIncompleteBlocks(md);
     const Theme t = Theme::fromPalette(palette());
     // 1) Charts: replace ```chart blocks with image references rendered natively.
     int chartNo = 0;
@@ -267,7 +304,7 @@ QString ChatView::renderMessage(int index, const Message &m, const Theme &t) {
         QStringList filters;
         body = m.text.isEmpty() ? QStringLiteral("<span style='color:%1'>Thinking...</span>").arg(hexColor(t.subtext))
                                 : markdownToHtml(m.streaming && transform_ ? transform_(m.text) : m.text, index,
-                                                 m.streaming ? nullptr : &filters);
+                                                 m.streaming ? nullptr : &filters, m.streaming);
         QStringList usable;
         for (const auto &cand : filters) {
             const QString f = toDisplayFilter(cand, validator_);
@@ -296,8 +333,9 @@ QString ChatView::renderMessage(int index, const Message &m, const Theme &t) {
 }
 
 void ChatView::render() {
-    const QScrollBar *sb = verticalScrollBar();
+    QScrollBar *sb = verticalScrollBar();
     const bool atBottom = sb->value() >= sb->maximum() - 24;
+    const int keep = sb->value();
     const Theme t = Theme::fromPalette(palette());
     QString html = QStringLiteral("<html><body style='color:%1'>").arg(hexColor(t.text));
     if (messages_.isEmpty()) {
@@ -307,11 +345,25 @@ void ChatView::render() {
                     "Answers include clickable filters, frame links and charts.</p></div>")
                     .arg(hexColor(t.subtext));
     }
-    for (int i = 0; i < messages_.size(); ++i) html += renderMessage(i, messages_[i], t);
+    for (int i = 0; i < messages_.size(); ++i) {
+        Message &m = messages_[i];
+        if (m.cachedHtml.isEmpty()) {
+            const QString rendered = renderMessage(i, m, t);
+            if (!m.streaming) m.cachedHtml = rendered; // settled messages never change again
+            html += rendered;
+        } else {
+            html += m.cachedHtml;
+        }
+    }
     html += QStringLiteral("</body></html>");
-    const int keep = sb->value();
+
+    // setHtml() rebuilds the document and parks the scroll bar at the top, so
+    // restoring the position a moment later reads as a flicker. Painting is off
+    // across the swap: the widget only redraws once the position is right again.
+    setUpdatesEnabled(false);
     setHtml(html);
-    verticalScrollBar()->setValue(atBottom ? verticalScrollBar()->maximum() : keep);
+    sb->setValue(atBottom ? sb->maximum() : qMin(keep, sb->maximum()));
+    setUpdatesEnabled(true);
 }
 
 } // namespace aiinspector

@@ -7,6 +7,12 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Smoother transcript while an answer streams in: settled messages are cached instead of
+  re-parsed from Markdown on every tick, the document swap no longer lets the scroll bar
+  flicker back to the top, blocks that have only half arrived (an open code fence, a partial
+  table row) are held back until they are complete, and updates run on a steady cadence.
+
 ## [1.3.0] - 2026-09-17
 
 ### Added

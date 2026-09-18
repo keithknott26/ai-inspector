@@ -35,7 +35,10 @@ public:
 
     // Checks a display filter with Wireshark's compiler (false + reason if invalid).
     using FilterValidator = std::function<bool(const QString &filter, QString *error)>;
-    void setFilterValidator(FilterValidator validator) { validator_ = std::move(validator); }
+    void setFilterValidator(FilterValidator validator) {
+        validator_ = std::move(validator);
+        for (auto &m : messages_) m.cachedHtml.clear();
+    }
     // Applied to an answer once it is complete (e.g. restoring redacted addresses).
     void setDisplayTransform(std::function<QString(const QString &)> transform) { transform_ = std::move(transform); }
 
@@ -60,11 +63,19 @@ private:
         enum Role { User, Assistant, Error } role;
         QString text;
         bool streaming = false;
+        // Rendered form of a settled message. Streaming rebuilds the whole
+        // document every tick; without this every earlier answer would be
+        // re-parsed from Markdown each time. Cleared when the text or the
+        // palette changes.
+        QString cachedHtml;
     };
     void scheduleRender();
     void render();
     QString renderMessage(int index, const Message &m, const Theme &t);
-    QString markdownToHtml(QString markdown, int messageIndex, QStringList *filters);
+    QString markdownToHtml(QString markdown, int messageIndex, QStringList *filters, bool streaming);
+    // Hides a block that has only half arrived (an open code fence, a partial
+    // table row), so the document height does not oscillate while streaming.
+    static QString hideIncompleteBlocks(const QString &markdown);
 
     QVector<Message> messages_;
     QHash<QString, QImage> charts_;
