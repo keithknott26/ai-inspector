@@ -531,6 +531,43 @@ private slots:
         qunsetenv("AI_INSPECTOR_KEY_FILE");
     }
 
+    // A provider forced by the environment is not silently different from the
+    // one shown in the dialog.
+    void providerOverrideIsVisible() {
+        {
+            UiSettings u = UiSettings::load(false);
+            u.ai.provider = Provider::Anthropic;
+            u.ai.endpoint.clear();
+            u.ai.model.clear();
+            u.save();
+        }
+        QCOMPARE(UiSettings::load(false).ai.provider, Provider::Anthropic);
+        {
+            SettingsDialog d;
+            QCOMPARE(d.findChild<QComboBox *>(QStringLiteral("provider"))->currentIndex(), int(Provider::Anthropic));
+            QVERIFY(!d.findChild<QLabel *>(QStringLiteral("envOverrides")));
+        }
+        qputenv("AI_INSPECTOR_PROVIDER", "openai");
+        QCOMPARE(UiSettings::load(true).ai.provider, Provider::OpenAI);
+        {
+            SettingsDialog d;
+            // The saved choice is still shown, but the override is spelled out.
+            QCOMPARE(d.findChild<QComboBox *>(QStringLiteral("provider"))->currentIndex(), int(Provider::Anthropic));
+            auto *note = d.findChild<QLabel *>(QStringLiteral("envOverrides"));
+            QVERIFY2(note, "no notice that AI_INSPECTOR_PROVIDER overrides the dialog");
+            QVERIFY2(note->text().contains(QStringLiteral("AI_INSPECTOR_PROVIDER")), qPrintable(note->text()));
+            QVERIFY(note->text().contains(QStringLiteral("OpenAI")));
+        }
+        qunsetenv("AI_INSPECTOR_PROVIDER");
+        // Saving still round-trips once the variable is gone.
+        {
+            UiSettings u = UiSettings::load(false);
+            u.ai.provider = Provider::Anthropic;
+            u.save();
+        }
+        QCOMPARE(UiSettings::load(true).ai.provider, Provider::Anthropic);
+    }
+
     // ---------------------------------------------------------------- tool calling
     void engineTools() {
         const QJsonObject summary{

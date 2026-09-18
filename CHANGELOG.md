@@ -7,6 +7,12 @@ All notable changes to AI Inspector. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Settings: a provider forced by `AI_INSPECTOR_PROVIDER` no longer looks like the saved
+  setting being ignored. The dialog now names every environment override, including the
+  provider, and says which variable to unset. Saving an endpoint that belongs to a different
+  provider asks for confirmation.
+
 ### Changed
 - Smoother transcript while an answer streams in: settled messages are cached instead of
   re-parsed from Markdown on every tick, the document swap no longer lets the scroll bar

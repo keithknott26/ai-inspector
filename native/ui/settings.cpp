@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QHBoxLayout>
+#include <QFont>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -276,13 +277,32 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QDialog(parent), nam_(new QNet
     setModelChoices(AiConfig::suggestedModels(cur.ai.provider));
     model_->setCurrentText(cur.ai.effectiveModel());
 
+    // Environment variables beat anything saved here, so a setting can be chosen
+    // above and quietly not used. Say so, and say it loudly for the provider:
+    // otherwise the dialog shows Claude while the panel is talking to OpenAI.
     const UiSettings effective = UiSettings::load(true);
-    if (effective.ai.model != cur.ai.model || effective.ai.endpoint != cur.ai.endpoint) {
-        auto *envNote = new QLabel(QStringLiteral("Environment overrides in effect: model %1, endpoint %2")
-                                       .arg(effective.ai.effectiveModel(), effective.ai.effectiveEndpoint().toString()), this);
+    const bool providerOverridden = effective.ai.provider != cur.ai.provider;
+    QStringList overrides;
+    if (providerOverridden)
+        overrides << QStringLiteral("provider %1 (AI_INSPECTOR_PROVIDER is set, and it wins over the choice above)")
+                         .arg(AiConfig::providerName(effective.ai.provider));
+    if (effective.ai.model != cur.ai.model)
+        overrides << QStringLiteral("model %1").arg(effective.ai.effectiveModel());
+    if (effective.ai.endpoint != cur.ai.endpoint)
+        overrides << QStringLiteral("endpoint %1").arg(effective.ai.effectiveEndpoint().toString());
+    if (!overrides.isEmpty()) {
+        auto *envNote = new QLabel(QStringLiteral("Environment overrides in effect: %1. Unset the variable in the shell "
+                                                  "that starts Wireshark to use the settings saved here.")
+                                       .arg(overrides.join(QStringLiteral("; "))), this);
+        envNote->setObjectName(QStringLiteral("envOverrides"));
         envNote->setWordWrap(true);
         envNote->setTextFormat(Qt::PlainText);
-        form->addRow(QString(), envNote);
+        if (providerOverridden) {
+            QFont f = envNote->font();
+            f.setBold(true);
+            envNote->setFont(f);
+        }
+        form->addRow(envNote); // spans both columns so it is not squeezed into the field column
     }
 
     timeout_ = autoSpin(this, 5, 900, 5, QStringLiteral(" s"), cur.ai.timeoutSeconds, QStringLiteral("timeout"));
@@ -510,6 +530,20 @@ UiSettings SettingsDialog::settings() const {
 
 void SettingsDialog::accept() {
     UiSettings u = settings();
+    // A custom endpoint survives a provider change on purpose, but pointing
+    // Claude at OpenAI's URL (or the reverse) only fails much later, with a
+    // confusing error. Catch it here.
+    const QString endpoint = endpoint_->text().trimmed();
+    for (int i = 0; i < 3; ++i) {
+        const Provider other = static_cast<Provider>(i);
+        if (other == u.ai.provider || endpoint != AiConfig::defaultEndpoint(other)) continue;
+        if (QMessageBox::warning(this, windowTitle(),
+                                 QStringLiteral("The endpoint URL is %1's, but the provider is set to %2. "
+                                                "Save anyway?")
+                                     .arg(AiConfig::providerName(other), AiConfig::providerName(u.ai.provider)),
+                                 QMessageBox::Save | QMessageBox::Cancel) != QMessageBox::Save)
+            return;
+    }
     const QString invalid = u.ai.validate();
     // A missing key is allowed at save time (the user may set an env var later).
     if (!invalid.isEmpty() && !invalid.startsWith(QStringLiteral("No API key"))) {
