@@ -105,8 +105,10 @@ bool UiSettings::isEnvVarName(const QString &text) {
 }
 
 int UiSettings::autoMaxFindings(Provider p) {
-    // Local models usually have small context windows.
-    return p == Provider::OpenAICompatible ? 25 : 60;
+    // With tool calls on (the default) this is a ceiling on what the assistant
+    // may pull per request, not what is pushed up front, so it can be generous.
+    // Local models still have small context windows.
+    return p == Provider::OpenAICompatible ? 150 : 500;
 }
 
 int UiSettings::effectiveMaxFindings() const {

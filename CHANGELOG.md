@@ -20,6 +20,9 @@ All notable changes to AI Inspector. The format follows
   provider asks for confirmation.
 
 ### Changed
+- "Findings sent to AI" now defaults to 500 for Anthropic and OpenAI (150 for
+  OpenAI-compatible servers, which usually have small context windows). With tool calls on
+  this is a ceiling on what the assistant may pull, not what is sent up front.
 - Settings: the three privacy choices (address redaction, the decoded packet tree, tool
   calls) are grouped under one "Privacy" heading. All three are on by default, and a test
   now holds them there.

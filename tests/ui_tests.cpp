@@ -544,6 +544,22 @@ private slots:
         qunsetenv("AI_INSPECTOR_KEY_FILE");
     }
 
+    // Findings sent to AI defaults to the provider ceiling, and the panel hands
+    // that ceiling to the tools.
+    void findingsCeiling() {
+        QCOMPARE(UiSettings::autoMaxFindings(Provider::Anthropic), 500);
+        QCOMPARE(UiSettings::autoMaxFindings(Provider::OpenAI), 500);
+        QVERIFY(UiSettings::autoMaxFindings(Provider::OpenAICompatible) < 500);
+        UiSettings u;
+        u.ai.provider = Provider::Anthropic;
+        u.maxFindings = 0; // Auto
+        QCOMPARE(u.effectiveMaxFindings(), 500);
+        u.maxFindings = 1000; // above the cap
+        QCOMPARE(u.effectiveMaxFindings(), 500);
+        u.maxFindings = 40; // an explicit choice is kept
+        QCOMPARE(u.effectiveMaxFindings(), 40);
+    }
+
     // The three privacy choices start on: redaction, the packet tree and tool
     // calls. A stored value wins, and Restore Defaults puts all three back.
     void privacyDefaultsAreOn() {
