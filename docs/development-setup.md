@@ -8,7 +8,7 @@ xcode-select --install
 brew install cmake ninja qt glib libgcrypt c-ares pcre2 speexdsp python git
 ```
 
-**Ubuntu 24.04**: see the package list in `.gitlab-ci.yml`.
+**Ubuntu 24.04**: see the package list in `.github/workflows/native-integration.yml`.
 
 ## 2. Get the Wireshark source
 
@@ -74,6 +74,12 @@ supports streaming and non-streaming responses for both provider APIs. The
 integration test starts Wireshark with `AI_INSPECTOR_UI_SELFTEST=1`. It drives the
 real panel against the mock server and checks that no credentials or raw addresses
 are sent.
+
+GitHub Actions runs **Native integration** on relevant PRs and `main` changes,
+or manually from the Actions tab. It builds the pinned Wireshark and both plugins
+on Ubuntu 24.04, then runs all unit suites, native MCP checks, and the offscreen
+UI self-tests for both provider protocols. Only the local mock AI server is used;
+no provider keys are needed. Build/test logs are retained for 14 days.
 
 Useful environment variables:
 

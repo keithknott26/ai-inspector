@@ -495,6 +495,37 @@ private slots:
         QVERIFY(s.contains(QStringLiteral("user=bob")) && s.contains(QStringLiteral("x=1")) && s.contains(QStringLiteral("keep=this")));
     }
 
+    void structuredSecretScrubbing() {
+        const QJsonObject input{
+            {QStringLiteral("filter"), QStringLiteral("http.request.uri matches \"(?i)(passw|token=)\"")},
+            {QStringLiteral("nested"), QJsonArray{
+                QJsonObject{{QStringLiteral("url"), QStringLiteral("/login?token=secret&keep=yes")},
+                            {QStringLiteral("auth"), QStringLiteral("Authorization: Bearer private-token")},
+                            {QStringLiteral("quoted"), QStringLiteral("known \"secret\" value")}},
+                42, true, QJsonValue(QJsonValue::Null)}},
+            {QStringLiteral("untouched"), QStringLiteral("quotes \" slash \\ tab\t newline\n")}};
+        const QString encoded = QString::fromUtf8(QJsonDocument(input).toJson(QJsonDocument::Compact));
+        const QString scrubbed = scrubSecrets(encoded, {QStringLiteral("known \"secret\" value")});
+        QJsonParseError error;
+        const QJsonDocument result = QJsonDocument::fromJson(scrubbed.toUtf8(), &error);
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        QVERIFY(result.isObject());
+        const auto nested = result.object().value(QStringLiteral("nested")).toArray();
+        QCOMPARE(nested.size(), 4);
+        QCOMPARE(nested.at(0).toObject().value(QStringLiteral("url")).toString(),
+                 QStringLiteral("/login?token=[redacted]&keep=yes"));
+        QCOMPARE(nested.at(0).toObject().value(QStringLiteral("auth")).toString(),
+                 QStringLiteral("Authorization: Bearer [redacted]"));
+        QCOMPARE(nested.at(0).toObject().value(QStringLiteral("quoted")).toString(), QStringLiteral("[redacted]"));
+        QCOMPARE(nested.at(1).toInt(), 42);
+        QVERIFY(nested.at(2).toBool());
+        QVERIFY(nested.at(3).isNull());
+        QCOMPARE(result.object().value(QStringLiteral("untouched")), input.value(QStringLiteral("untouched")));
+        const QString array = QString::fromUtf8(QJsonDocument(QJsonArray{input}).toJson(QJsonDocument::Compact));
+        QVERIFY(QJsonDocument::fromJson(scrubSecrets(array).toUtf8()).isArray());
+        QVERIFY(!scrubbed.contains(QStringLiteral("private-token")));
+    }
+
     // ---------------------------------------------------------------- settings / key file
     void settingsAndKeyFile() {
         const QString keyFile = tmp_.filePath(QStringLiteral("keys/api_key"));
@@ -788,6 +819,7 @@ private slots:
             {QStringLiteral("findings"), QJsonArray{
                 QJsonObject{{QStringLiteral("id"), QStringLiteral("tcp.zero_window")}, {QStringLiteral("severity_level"), 4},
                             {QStringLiteral("category"), QStringLiteral("performance")}, {QStringLiteral("protocol"), QStringLiteral("TCP")},
+                            {QStringLiteral("filter"), QStringLiteral("http.request.uri matches \"(?i)(passw|token=)\"")},
                             {QStringLiteral("title"), QStringLiteral("Zero window from 10.0.0.5")}}}}};
         Host host;
         host.engineAvailable = [] { return true; };
@@ -816,6 +848,12 @@ private slots:
         // The tool result went out redacted.
         QVERIFY2(second.contains(QStringLiteral("Zero window from IP-1(private)")), qPrintable(second.left(600)));
         QVERIFY(!second.contains(QStringLiteral("10.0.0.5")));
+        const auto messages = QJsonDocument::fromJson(second.toUtf8()).object().value(QStringLiteral("messages")).toArray();
+        const auto toolContent = messages.last().toObject().value(QStringLiteral("content")).toString();
+        QJsonParseError error;
+        const auto toolResult = QJsonDocument::fromJson(toolContent.toUtf8(), &error);
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        QCOMPARE(toolResult.object().value(QStringLiteral("findings")).toArray().size(), 1);
         // The transcript shows the real address again and records the call.
         const QString shown = p.findChild<QTextBrowser *>(QStringLiteral("transcript"))->toPlainText();
         QVERIFY2(shown.contains(QStringLiteral("get_findings")), qPrintable(shown));

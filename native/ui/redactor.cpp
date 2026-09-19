@@ -2,6 +2,9 @@
 #include "redactor.h"
 
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -113,7 +116,33 @@ bool isSensitiveField(const QString &abbrev) {
     return false;
 }
 
+static QJsonValue scrubJsonValue(const QJsonValue &value, const QStringList &secretValues) {
+    if (value.isString()) return scrubSecrets(value.toString(), secretValues);
+    if (value.isArray()) {
+        QJsonArray out;
+        for (const auto &item : value.toArray()) out.append(scrubJsonValue(item, secretValues));
+        return out;
+    }
+    if (value.isObject()) {
+        QJsonObject out = value.toObject();
+        for (auto it = out.begin(); it != out.end(); ++it)
+            *it = scrubJsonValue(it.value(), secretValues);
+        return out;
+    }
+    return value;
+}
+
 QString scrubSecrets(const QString &text, const QStringList &secretValues) {
+    // Scrubbing serialized JSON can consume the backslash before an escaped
+    // quote, corrupting the whole tool result. Scrub decoded string values and
+    // let Qt serialize them again; preserve keys, numbers, booleans and nulls.
+    const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
+    if (doc.isObject() || doc.isArray()) {
+        const QJsonValue value = doc.isObject() ? QJsonValue(doc.object()) : QJsonValue(doc.array());
+        const QJsonValue clean = scrubJsonValue(value, secretValues);
+        const QJsonDocument result = clean.isObject() ? QJsonDocument(clean.toObject()) : QJsonDocument(clean.toArray());
+        return QString::fromUtf8(result.toJson(QJsonDocument::Compact));
+    }
     QString s = text;
     QStringList values = secretValues;
     // Longest first so a value that contains another is removed whole.

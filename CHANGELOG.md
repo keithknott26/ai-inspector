@@ -8,6 +8,9 @@ All notable changes to AI Inspector. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Native AI tool results remain valid JSON after secret scrubbing. Regression tests
+  cover escaped quotes, nested values, and both providers' in-app tool round trips.
+- GUI integration tests use isolated settings and count tool-call follow-up requests.
 - MCP filter searches no longer stop after `limit * 4` input packets. Successful
   results explicitly report a complete scan and distinguish omitted matching rows.
 - MCP per-frame findings use the engine's `ai_inspector.finding` field and structured
@@ -18,6 +21,8 @@ All notable changes to AI Inspector. The format follows
   and reap the process instead of silently returning partial output.
 
 ### Added
+- Automated Linux native-integration CI builds the pinned Wireshark and both
+  plugins, then runs unit, MCP, and in-app UI tests with saved diagnostic logs.
 - Dependency-free MCP regression tests, CTest integration, and a Linux/Windows/macOS
   GitHub Actions workflow, including real-packet tests on Linux.
 
